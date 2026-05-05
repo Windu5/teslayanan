@@ -117,13 +117,13 @@
                 nama_petugas: '',
             },
 
-            // --- Definisi Grup Kategori Baru ---
+            // --- Definisi Grup Kategori Baru (Ditambahkan Tema Warna) ---
             layananGroups: [
-                { id: 'A', name: 'A. Pelayanan Ruang UGD/Ranap' },
-                { id: 'B', name: 'B. Tindakan Medik Umum (UGD/Ranap)' },
-                { id: 'C', name: 'C. Tindakan Medik Kamar Bersalin' },
-                { id: 'D', name: 'D. Penunjang Diagnostik' },
-                { id: 'E', name: 'E. Laboratorium' }
+                { id: 'A', name: 'A. Pelayanan Ruang UGD/Ranap', bgClass: 'bg-blue-50', borderClass: 'border-blue-200', textClass: 'text-blue-800' },
+                { id: 'B', name: 'B. Tindakan Medik Umum (UGD/Ranap)', bgClass: 'bg-emerald-50', borderClass: 'border-emerald-200', textClass: 'text-emerald-800' },
+                { id: 'C', name: 'C. Tindakan Medik Kamar Bersalin', bgClass: 'bg-rose-50', borderClass: 'border-rose-200', textClass: 'text-rose-800' },
+                { id: 'D', name: 'D. Penunjang Diagnostik', bgClass: 'bg-purple-50', borderClass: 'border-purple-200', textClass: 'text-purple-800' },
+                { id: 'E', name: 'E. Laboratorium', bgClass: 'bg-cyan-50', borderClass: 'border-cyan-200', textClass: 'text-cyan-800' }
             ],
 
             // Fungsi Pintar untuk mapping kategori master tarif ke Grup UI
@@ -966,11 +966,13 @@
 
                             <template x-for="group in layananGroups" :key="group.id">
                                 <!-- Tampilkan section hanya jika ada Master Tarif di kategori ini ATAU pengguna sudah terlanjur menginputnya -->
-                                <div x-show="groupedTarifs[group.id].length > 0 || formData.rincian_biaya.some(r => r.groupId === group.id)" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div x-show="groupedTarifs[group.id].length > 0 || formData.rincian_biaya.some(r => r.groupId === group.id)" 
+                                     class="bg-white rounded-xl shadow-sm border overflow-hidden"
+                                     :class="group.borderClass">
                                     
                                     <!-- Header Group -->
-                                    <div class="bg-gray-50 px-4 py-3 border-b border-gray-200">
-                                        <h3 class="font-bold text-gray-800 text-[15px]" x-text="group.name"></h3>
+                                    <div class="px-4 py-3 border-b" :class="group.bgClass + ' ' + group.borderClass">
+                                        <h3 class="font-bold text-[15px]" :class="group.textClass" x-text="group.name"></h3>
                                     </div>
 
                                     <div class="p-4">
@@ -990,9 +992,9 @@
                                         </div>
 
                                         <!-- Tabel Rincian Biaya Khusus Group Ini -->
-                                        <div class="border border-gray-200 rounded-md overflow-hidden">
-                                            <div class="px-3 py-2 bg-green-50/50 border-b border-gray-200">
-                                                <span class="text-[11px] font-bold text-green-700 uppercase tracking-wider">Rincian Biaya</span>
+                                        <div class="border rounded-md overflow-hidden" :class="group.borderClass">
+                                            <div class="px-3 py-2 border-b" :class="group.bgClass + ' ' + group.borderClass">
+                                                <span class="text-[11px] font-bold uppercase tracking-wider" :class="group.textClass">Rincian Biaya</span>
                                             </div>
                                             <div class="overflow-x-auto custom-scrollbar">
                                                 <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
@@ -1438,8 +1440,8 @@
                                                 <!-- Pengelompokan Kategori Biaya Sesuai Urutan -->
                                                 <template x-for="group in layananGroups" :key="group.id">
                                                     <tbody x-show="formData.rincian_biaya.some(r => r.groupId === group.id)">
-                                                        <tr class="bg-gray-50 border-y border-gray-200">
-                                                            <td colspan="4" class="px-3 py-2 text-xs font-bold text-gray-800" x-text="group.name"></td>
+                                                        <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
+                                                            <td colspan="4" class="px-3 py-2 text-xs font-bold" :class="group.textClass" x-text="group.name"></td>
                                                         </tr>
                                                         <template x-for="(item, idx) in formData.rincian_biaya" :key="item.kode + '_' + idx">
                                                             <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
@@ -1564,8 +1566,8 @@
                                                     <!-- Pengelompokan Kategori Biaya Sesuai Urutan di Daftar Riwayat -->
                                                     <template x-for="group in layananGroups" :key="group.id">
                                                         <tbody x-show="selectedVisit.rincian_biaya?.some(r => r.groupId === group.id)">
-                                                            <tr class="bg-gray-50 border-y border-gray-200">
-                                                                <td colspan="4" class="px-3 py-2 text-xs font-bold text-gray-800" x-text="group.name"></td>
+                                                            <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
+                                                                <td colspan="4" class="px-3 py-2 text-xs font-bold" :class="group.textClass" x-text="group.name"></td>
                                                             </tr>
                                                             <template x-for="(item, idx) in selectedVisit.rincian_biaya" :key="item.kode + '_' + idx">
                                                                 <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
