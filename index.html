@@ -111,41 +111,75 @@
                 umur: '',
                 alamat: '',
                 unit_asal: 'UGD/Gawat Darurat',
-                rujukan: { status: false, alasan: '', transportasi: 'Ambulans Puskesmas' },
+                rujukan: { status: false, id_tarif_ambulan: '' },
+                catatan: '',
                 rincian_biaya: [],
                 nama_petugas: '',
             },
 
-            searchTindakan: '', // Input pencarian untuk dropdown
-            showDropdownTindakan: false, // Kontrol visibilitas dropdown kustom
+            // --- Definisi Grup Kategori Baru ---
+            layananGroups: [
+                { id: 'A', name: 'A. Pelayanan Ruang UGD/Ranap' },
+                { id: 'B', name: 'B. Tindakan Medik Umum (UGD/Ranap)' },
+                { id: 'C', name: 'C. Tindakan Medik Kamar Bersalin' },
+                { id: 'D', name: 'D. Penunjang Diagnostik' },
+                { id: 'E', name: 'E. Laboratorium' }
+            ],
+
+            // Fungsi Pintar untuk mapping kategori master tarif ke Grup UI
+            getTarifGroupId(tarif) {
+                if (tarif.kode && tarif.kode.startsWith('AMB-')) return 'A'; // Ambulans dialokasikan ke tabel rincian A (UGD)
+                
+                const cat = (tarif.kategori || '').toLowerCase();
+                if (cat.includes('lab') || cat.includes('laboratorium')) return 'E';
+                if (cat.includes('diagnost') || cat.includes('radiologi') || cat.includes('rontgen') || cat.includes('usg') || cat.includes('ekg')) return 'D';
+                if (cat.includes('bersalin') || cat.includes('kia') || cat.includes('nifas') || cat.includes('persalinan') || cat.includes('bidan')) return 'C';
+                if (cat.includes('umum') || cat.includes('tindakan medik') || cat.includes('bedah minor')) return 'B';
+                if (cat.includes('ugd') || cat.includes('ranap') || cat.includes('pelayanan') || cat.includes('karcis') || cat.includes('pendaftaran') || cat.includes('konsultasi')) return 'A';
+                return 'B'; // Fallback otomatis ke Tindakan Medik Umum jika kategori tidak dikenali
+            },
+
+            get groupedTarifs() {
+                const groups = { A: [], B: [], C: [], D: [], E: [] };
+                this.tarifs.forEach(t => {
+                    if (t.aktif === false) return; // Sembunyikan tarif non-aktif
+                    if (t.kode && t.kode.startsWith('AMB-')) return; // Sembunyikan Ambulans dari dropdown manual (karena sudah ada form rujukan di bawah)
+                    
+                    const gId = this.getTarifGroupId(t);
+                    if (groups[gId]) {
+                        groups[gId].push(t);
+                    }
+                });
+                return groups;
+            },
+
+            // Ambil khusus data tarif dengan kode berawalan "AMB-" untuk dropdown rujukan
+            get ambulanceTarifs() {
+                return this.tarifs.filter(t => t.kode.startsWith('AMB-') && t.aktif !== false);
+            },
 
             get totalBiaya() {
-                return this.formData.rincian_biaya.reduce((sum, item) => sum + item.subtotal, 0);
-            },
-
-            get filteredDropdownTarifs() {
-                // Filter tarif yang aktif DAN sembunyikan khusus AMB-001 dari pencarian manual
-                let active = this.tarifs.filter(t => t.aktif !== false && t.kode !== 'AMB-001');
-                if (this.searchTindakan.trim() !== '') {
-                    const q = this.searchTindakan.toLowerCase();
-                    active = active.filter(t => t.nama.toLowerCase().includes(q) || t.kode.toLowerCase().includes(q));
+                // Menjumlahkan rincian tindakan
+                let rincianTotal = this.formData.rincian_biaya.reduce((sum, item) => sum + item.subtotal, 0);
+                
+                // Tambahkan otomatis secara terpisah ke total jika opsi Rujukan aktif
+                if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status && this.formData.rujukan.id_tarif_ambulan) {
+                    const amb = this.tarifs.find(t => t.kode === this.formData.rujukan.id_tarif_ambulan);
+                    if (amb) rincianTotal += amb.harga;
                 }
-                return active;
-            },
-
-            tambahDanTutupDropdown(tarifObj) {
-                this.tambahKeRincian(tarifObj, 1);
-                this.searchTindakan = ''; // Kosongkan kolom pencarian
-                this.showDropdownTindakan = false; // Tutup dropdown
+                
+                return rincianTotal;
             },
 
             init() {
                 window.addEventListener('online', () => this.isOffline = false);
                 window.addEventListener('offline', () => this.isOffline = true);
 
-                this.$watch('formData.unit_asal', () => this.checkAmbulance());
-                this.$watch('formData.rujukan.status', () => this.checkAmbulance());
-                this.$watch('formData.rujukan.transportasi', () => this.checkAmbulance());
+                this.$watch('formData.rujukan.status', () => {
+                    if (!this.formData.rujukan.status) {
+                        this.formData.rujukan.id_tarif_ambulan = ''; // Reset jika dimatikan
+                    }
+                });
 
                 // FAIL-SAFE: Timeout jika Firebase gagal inisialisasi akibat cache/blokir
                 const loadingTimeout = setTimeout(() => {
@@ -246,30 +280,10 @@
                 );
             },
 
-            checkAmbulance() {
-                // Cari tarif Ambulans berdasarkan kode AMB-001 atau nama yang mengandung kata "Ambulan"
-                const tarifAmb = this.tarifs.find(t => t.kode === 'AMB-001' || t.nama.toLowerCase().includes('ambulan'));
-
-                if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status && this.formData.rujukan.transportasi === 'Ambulans Puskesmas') {
-                    if (tarifAmb) {
-                        const hasAmbulans = this.formData.rincian_biaya.some(item => item.kode === tarifAmb.kode);
-                        if (!hasAmbulans) {
-                            this.tambahKeRincian(tarifAmb, 1, true);
-                            this.showNotification("Tarif Ambulans ditambahkan secara otomatis.", "success");
-                        }
-                    } else {
-                        // Munculkan notifikasi jika tarif tidak ditemukan di database
-                        this.showNotification("Peringatan: Data tarif Ambulans tidak ditemukan di Master Tarif!", "error");
-                    }
-                } else {
-                    // Hapus item ambulans otomatis jika batal rujuk ATAU menggunakan kendaraan sendiri
-                    this.formData.rincian_biaya = this.formData.rincian_biaya.filter(item => !item.isAutoAddedAmbulance);
-                }
-            },
-
-            tambahKeRincian(tarifObj, qty, isAuto = false) {
+            tambahKeRincian(tarifObj, qty) {
                 if (!tarifObj || qty <= 0) return;
-                const existingIndex = this.formData.rincian_biaya.findIndex(item => item.kode === tarifObj.kode && !item.isAutoAddedAmbulance);
+                const groupId = this.getTarifGroupId(tarifObj); // Menyimpan ID Grup
+                const existingIndex = this.formData.rincian_biaya.findIndex(item => item.kode === tarifObj.kode);
                 
                 if (existingIndex >= 0) {
                     this.formData.rincian_biaya[existingIndex].qty += qty;
@@ -281,7 +295,7 @@
                         harga_satuan: tarifObj.harga,
                         qty: qty,
                         subtotal: tarifObj.harga * qty,
-                        isAutoAddedAmbulance: isAuto
+                        groupId: groupId // Agar bisa difilter di tabel khusus grupnya
                     });
                 }
             },
@@ -325,6 +339,7 @@
                     tanggal: new Date().toLocaleDateString('id-ID'),
                     timestamp: serverTimestamp(),
                     unit_asal: this.formData.unit_asal,
+                    catatan: this.formData.catatan,
                     rincian_biaya: this.formData.rincian_biaya.map(i => ({...i})), 
                     total_biaya: this.totalBiaya,
                     status_pemeriksaan: 'Belum Diperiksa', // Status pemeriksaan default
@@ -332,7 +347,12 @@
                 };
 
                 if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status) {
-                    payload.rujukan = { status: true, alasan: this.formData.rujukan.alasan, transportasi: this.formData.rujukan.transportasi };
+                    const tarifAmb = this.tarifs.find(t => t.kode === this.formData.rujukan.id_tarif_ambulan);
+                    payload.rujukan = { 
+                        status: true, 
+                        rs_tujuan: tarifAmb ? tarifAmb.nama : 'Tidak Diketahui', 
+                        biaya: tarifAmb ? tarifAmb.harga : 0 
+                    };
                 }
 
                 try {
@@ -348,12 +368,11 @@
             resetForm() {
                 this.formData = {
                     id_pasien: '', umur: '', alamat: '', unit_asal: 'UGD/Gawat Darurat',
-                    rujukan: { status: false, alasan: '', transportasi: 'Ambulans Puskesmas' },
+                    rujukan: { status: false, id_tarif_ambulan: '' },
+                    catatan: '',
                     rincian_biaya: [],
                     nama_petugas: ''
                 };
-                this.searchTindakan = '';
-                this.showDropdownTindakan = false;
                 this.activeTab = 'kunjungan';
             },
 
@@ -455,28 +474,34 @@
                 }
 
                 let rincianHtml = '';
-                visit.rincian_biaya.forEach((item, index) => {
-                    rincianHtml += `
-                        <tr>
-                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: center;">${index + 1}</td>
-                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc;">${item.nama}</td>
-                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.qty}</td>
-                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: right;">${this.formatRp(item.subtotal)}</td>
-                        </tr>
-                    `;
+                // Mengurutkan dan mengelompokkan tampilan berdasarkan kategori (A, B, C, D, E) pada Struk
+                this.layananGroups.forEach(group => {
+                    const itemsInGroup = visit.rincian_biaya.filter(item => item.groupId === group.id);
+                    if (itemsInGroup.length > 0) {
+                        rincianHtml += `
+                            <tr>
+                                <td colspan="4" style="padding: 10px 0 4px 0; font-weight: bold; font-size: 13px; color: #333;">${group.name}</td>
+                            </tr>
+                        `;
+                        itemsInGroup.forEach((item) => {
+                            rincianHtml += `
+                                <tr>
+                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">-</td>
+                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc;">${item.nama}</td>
+                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.qty}</td>
+                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: right;">${this.formatRp(item.subtotal)}</td>
+                                </tr>
+                            `;
+                        });
+                    }
                 });
 
                 let rujukanText = 'Tidak';
                 let transportText = '-';
                 
                 if (visit.rujukan && visit.rujukan.status) {
-                    rujukanText = `Ya, ke ${visit.rujukan.alasan || 'Rumah Sakit Tujuan'}`;
-                    transportText = visit.rujukan.transportasi;
-                    if (transportText === 'Ambulans Puskesmas') {
-                        transportText += ' (Sesuai Tarif)';
-                    } else if (transportText === 'Kendaraan Sendiri / Keluarga') {
-                        transportText += ' (Biaya 0)';
-                    }
+                    rujukanText = `Ya, ke ${visit.rujukan.rs_tujuan || 'Rumah Sakit Tujuan'}`;
+                    transportText = `Biaya Ambulans: ${this.formatRp(visit.rujukan.biaya || 0)}`;
                 }
 
                 const officerName = visit.nama_petugas ? visit.nama_petugas : (this.user && this.user.email ? this.user.email.split('@')[0] : 'Petugas');
@@ -544,6 +569,13 @@
                                     <div>: ${transportText}</div>
                                 </div>
                             </div>
+
+                            ${visit.catatan ? `
+                            <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f9f9; border-left: 3px solid #666;">
+                                <strong>Catatan:</strong><br>
+                                <span style="white-space: pre-line;">${visit.catatan}</span>
+                            </div>
+                            ` : ''}
 
                             <div style="margin-top: 40px; text-align: right;">
                                 Petugas ${visit.unit_asal}<br><br><br>
@@ -646,16 +678,30 @@
                         let count = 0;
                         
                         for (const tarif of importedData) {
-                            if (tarif.kode && tarif.nama) {
-                                const sanitizedKode = String(tarif.kode).replace(/\s+/g, '-').toUpperCase();
+                            // Mapping pintar agar mendeteksi nama key JSON asli dan custom (seperti hasil konversi Excel)
+                            const rawKode = tarif.kode || tarif.Kode;
+                            const rawNama = tarif.nama || tarif["Nama Layanan / Tindakan"] || tarif.Nama;
+                            const rawKategori = tarif.kategori || tarif.Kategori || 'Lain-lain';
+                            const rawHarga = tarif.harga !== undefined ? tarif.harga : (tarif["Harga (Rp)"] !== undefined ? tarif["Harga (Rp)"] : 0);
+                            
+                            // Mendeteksi status aktif
+                            let rawAktif = true;
+                            if (tarif.aktif !== undefined) {
+                                rawAktif = tarif.aktif;
+                            } else if (tarif.Status !== undefined) {
+                                rawAktif = (tarif.Status === 'Aktif' || tarif.Status === 'aktif' || tarif.Status === true);
+                            }
+
+                            if (rawKode && rawNama) {
+                                const sanitizedKode = String(rawKode).replace(/\s+/g, '-').toUpperCase();
                                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan', sanitizedKode);
                                 
                                 await setDoc(docRef, {
                                     kode: sanitizedKode,
-                                    nama: tarif.nama,
-                                    kategori: tarif.kategori || 'Lain-lain',
-                                    harga: Number(tarif.harga) || 0,
-                                    aktif: tarif.aktif !== undefined ? tarif.aktif : true
+                                    nama: rawNama,
+                                    kategori: rawKategori,
+                                    harga: Number(rawHarga) || 0,
+                                    aktif: rawAktif
                                 });
                                 count++;
                             }
@@ -798,7 +844,7 @@
             </header>
 
             <!-- Main Content Area -->
-            <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-2">
+            <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
                 
                 <!-- TAB: DAFTAR KUNJUNGAN -->
                 <div x-show="activeTab === 'kunjungan'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -906,116 +952,104 @@
                                         <option value="UGD/Gawat Darurat">UGD / Gawat Darurat</option>
                                         <option value="Rawat Inap">Rawat Inap</option>
                                         <option value="Kamar Bersalin">Kamar Bersalin</option>
-                                        <option value="Laboratorium">Laboratorium</option>
-                                        <option value="Penunjang Diagnostik">Penunjang Diagnostik</option>
-                                        <option value="Tindakan Medik Umum">Tindakan Medik Umum</option>
                                     </select>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- PANEL DAFTAR TINDAKAN (POS STYLE) -->
-                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                            <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 flex items-center">
-                                <svg class="mr-2 text-green-600" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
-                                Tambahkan Tindakan / Layanan
+                        <!-- PANEL DAFTAR TINDAKAN KELOMPOK (MENGGANTIKAN VERSI LAMA) -->
+                        <div class="space-y-6">
+                            <h2 class="text-xl font-bold text-gray-800 flex items-center">
+                                <svg class="mr-2 text-green-600" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                Jenis Pelayanan & Rincian Biaya
                             </h2>
-                            
-                            <div class="relative mb-2" @click.outside="showDropdownTindakan = false">
-                                <div class="relative w-full">
-                                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                        <svg class="h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                                    </div>
-                                    <input type="text" 
-                                        x-model="searchTindakan" 
-                                        @focus="showDropdownTindakan = true"
-                                        placeholder="Ketik nama atau kode tindakan untuk mencari..." 
-                                        class="w-full pl-10 px-3 py-3 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 focus:bg-white transition-colors">
-                                </div>
-                                
-                                <!-- Dropdown List (Melayang) -->
-                                <div x-show="showDropdownTindakan" 
-                                     x-transition
-                                     class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto custom-scrollbar"
-                                     style="display: none;">
-                                    
-                                    <template x-if="filteredDropdownTarifs.length === 0">
-                                        <div class="px-4 py-3 text-sm text-gray-500 text-center">Tindakan tidak ditemukan.</div>
-                                    </template>
-                                    
-                                    <template x-for="t in filteredDropdownTarifs" :key="t.kode">
-                                        <div @click="tambahDanTutupDropdown(t)" 
-                                             class="px-4 py-2 cursor-pointer hover:bg-green-50 border-b border-gray-50 last:border-0 transition-colors">
-                                            <div class="flex justify-between items-center">
-                                                <div class="text-sm font-medium text-gray-800" x-text="t.nama"></div>
-                                                <div class="text-xs font-semibold text-green-600" x-text="formatRp(t.harga)"></div>
-                                            </div>
-                                            <div class="text-xs text-gray-500 font-mono mt-0.5" x-text="t.kode"></div>
-                                        </div>
-                                    </template>
-                                </div>
-                            </div>
-                        </div>
 
-                        <!-- Panel Tabel Rincian -->
-                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full">
-                            <div class="p-4 border-b border-gray-200 bg-gray-50">
-                                <h3 class="font-medium text-gray-800">Rincian Biaya</h3>
-                            </div>
-                            <div class="overflow-x-auto w-full custom-scrollbar pb-2">
-                                <!-- Lebar minimum dinaikkan jadi 600px agar tabel tidak memaksakan diri mengecil di HP -->
-                                <table class="w-full text-sm text-left text-gray-600 min-w-[600px]">
-                                    <thead class="text-xs text-gray-500 uppercase bg-gray-100">
-                                        <tr>
-                                            <th class="px-4 py-2 text-center w-12">No</th>
-                                            <th class="px-4 py-2">Nama Tindakan/Layanan</th>
-                                            <th class="px-4 py-2 text-right">Harga</th>
-                                            <th class="px-4 py-2 text-center w-28">Qty</th>
-                                            <th class="px-4 py-2 text-right">Subtotal</th>
-                                            <th class="px-4 py-2 text-center w-12"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <template x-if="formData.rincian_biaya.length === 0">
-                                            <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400 italic">Silakan tambahkan tindakan dari daftar di atas.</td></tr>
-                                        </template>
-                                        <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
-                                            <tr class="border-b" :class="item.isAutoAddedAmbulance ? 'bg-amber-50' : 'bg-white'">
-                                                <td class="px-4 py-3 text-center font-medium" x-text="idx + 1"></td>
-                                                <td class="px-4 py-3">
-                                                    <div class="font-medium text-gray-800" x-text="item.nama"></div>
-                                                    <div class="text-xs text-gray-500 font-mono" x-text="item.kode"></div>
-                                                    <template x-if="item.isAutoAddedAmbulance">
-                                                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 mt-1">
-                                                            🚑 Auto
-                                                        </span>
-                                                    </template>
-                                                </td>
-                                                <td class="px-4 py-3 text-right" x-text="formatRp(item.harga_satuan)"></td>
-                                                <td class="px-4 py-3">
-                                                    <!-- Kontrol Qty Plus Minus -->
-                                                    <div class="flex items-center justify-center space-x-2">
-                                                        <button @click="kurangiQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors">-</button>
-                                                        <span x-text="item.qty" class="w-6 text-center font-medium"></span>
-                                                        <button @click="tambahQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors">+</button>
-                                                    </div>
-                                                </td>
-                                                <td class="px-4 py-3 text-right font-bold text-gray-800" x-text="formatRp(item.subtotal)"></td>
-                                                <td class="px-4 py-3 text-center">
-                                                    <button @click="hapusRincian(idx)" class="text-red-500 hover:text-red-700 text-xs font-medium bg-red-50 p-1.5 rounded">
-                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        </template>
-                                    </tbody>
-                                </table>
-                            </div>
+                            <template x-for="group in layananGroups" :key="group.id">
+                                <!-- Tampilkan section hanya jika ada Master Tarif di kategori ini ATAU pengguna sudah terlanjur menginputnya -->
+                                <div x-show="groupedTarifs[group.id].length > 0 || formData.rincian_biaya.some(r => r.groupId === group.id)" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                    
+                                    <!-- Header Group -->
+                                    <div class="bg-gray-50 px-4 py-3 border-b border-gray-200">
+                                        <h3 class="font-bold text-gray-800 text-[15px]" x-text="group.name"></h3>
+                                    </div>
+
+                                    <div class="p-4">
+                                        <!-- Dropdown Pilihan Tindakan Per Kategori -->
+                                        <div class="mb-4">
+                                            <select 
+                                                class="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 hover:bg-white transition-colors cursor-pointer"
+                                                @change="if($event.target.value) { 
+                                                    const t = groupedTarifs[group.id].find(x => x.kode === $event.target.value); 
+                                                    if(t) { tambahKeRincian(t, 1); $event.target.value = ''; } 
+                                                }">
+                                                <option value="" selected>+ Pilih & Tambahkan Rincian Biaya...</option>
+                                                <template x-for="t in groupedTarifs[group.id]" :key="t.kode">
+                                                    <option :value="t.kode" x-text="t.kode + ' - ' + t.nama + ' (' + formatRp(t.harga) + ')'"></option>
+                                                </template>
+                                            </select>
+                                        </div>
+
+                                        <!-- Tabel Rincian Biaya Khusus Group Ini -->
+                                        <div class="border border-gray-200 rounded-md overflow-hidden">
+                                            <div class="px-3 py-2 bg-green-50/50 border-b border-gray-200">
+                                                <span class="text-[11px] font-bold text-green-700 uppercase tracking-wider">Rincian Biaya</span>
+                                            </div>
+                                            <div class="overflow-x-auto custom-scrollbar">
+                                                <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
+                                                    <thead class="text-[11px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+                                                        <tr>
+                                                            <th class="px-3 py-2 w-8 text-center"></th>
+                                                            <th class="px-3 py-2">Nama Tindakan / Layanan</th>
+                                                            <th class="px-3 py-2 text-right">Harga</th>
+                                                            <th class="px-3 py-2 text-center w-24">Qty</th>
+                                                            <th class="px-3 py-2 text-right">Subtotal</th>
+                                                            <th class="px-3 py-2 text-center w-10"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <!-- Pesan jika kosong -->
+                                                        <template x-if="!formData.rincian_biaya.some(r => r.groupId === group.id)">
+                                                            <tr><td colspan="6" class="px-3 py-4 text-center text-gray-400 italic text-xs">Belum ada tindakan yang dipilih untuk kategori ini.</td></tr>
+                                                        </template>
+                                                        
+                                                        <!-- Loop rincian biaya yang difilter khusus grup ini -->
+                                                        <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
+                                                            <template x-if="item.groupId === group.id">
+                                                                <tr class="border-b last:border-0 hover:bg-gray-50 bg-white">
+                                                                    <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                                    <td class="px-3 py-2">
+                                                                        <div class="font-medium text-gray-800 text-xs" x-text="item.nama"></div>
+                                                                        <div class="text-[10px] text-gray-400 font-mono mt-0.5" x-text="item.kode"></div>
+                                                                    </td>
+                                                                    <td class="px-3 py-2 text-right text-xs" x-text="formatRp(item.harga_satuan)"></td>
+                                                                    <td class="px-3 py-2">
+                                                                        <div class="flex items-center justify-center space-x-1.5">
+                                                                            <button type="button" @click="kurangiQty(idx)" class="w-5 h-5 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">-</button>
+                                                                            <span x-text="item.qty" class="w-5 text-center font-medium text-xs"></span>
+                                                                            <button type="button" @click="tambahQty(idx)" class="w-5 h-5 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">+</button>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td class="px-3 py-2 text-right font-bold text-gray-800 text-xs" x-text="formatRp(item.subtotal)"></td>
+                                                                    <td class="px-3 py-2 text-center">
+                                                                        <button type="button" @click="hapusRincian(idx)" class="text-red-500 hover:text-red-700 text-[10px] font-medium bg-red-50 p-1 rounded transition-colors">
+                                                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            </template>
+                                                        </template>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
 
                         <!-- Opsi Rujukan UGD (Dipindah ke bawah Rincian Biaya) -->
                         <template x-if="formData.unit_asal === 'UGD/Gawat Darurat'">
-                            <div class="p-5 bg-amber-50 rounded-xl border border-amber-200 shadow-sm">
+                            <div class="p-5 bg-amber-50 rounded-xl border border-amber-200 shadow-sm mt-6">
                                 <label class="flex items-center space-x-3 text-amber-900 font-semibold cursor-pointer">
                                     <input type="checkbox" x-model="formData.rujukan.status" class="rounded text-green-600 focus:ring-green-500 w-5 h-5 cursor-pointer">
                                     <span>Pasien Dirujuk ke RS / Fasilitas Lain?</span>
@@ -1024,18 +1058,33 @@
                                 <div x-show="formData.rujukan.status" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4" style="display: none;">
                                     <div>
                                         <label class="block text-sm font-medium text-amber-800 mb-1">Tujuan / RS Rujukan</label>
-                                        <input type="text" x-model="formData.rujukan.alasan" class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white" placeholder="Contoh: ke RSUD Dr. Soetomo">
+                                        <select x-model="formData.rujukan.id_tarif_ambulan" class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white">
+                                            <option value="" disabled selected>-- Pilih Tujuan RS --</option>
+                                            <template x-for="amb in ambulanceTarifs" :key="amb.kode">
+                                                <option :value="amb.kode" x-text="amb.nama"></option>
+                                            </template>
+                                        </select>
                                     </div>
                                     <div>
-                                        <label class="block text-sm font-medium text-amber-800 mb-1">Transportasi</label>
-                                        <select x-model="formData.rujukan.transportasi" class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white">
-                                            <option value="Ambulans Puskesmas">Ambulans Puskesmas</option>
-                                            <option value="Kendaraan Sendiri / Keluarga">Kendaraan Sendiri / Keluarga</option>
-                                        </select>
+                                        <label class="block text-sm font-medium text-amber-800 mb-1">Biaya Ambulans</label>
+                                        <div class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md bg-amber-100 font-bold text-amber-900 flex items-center h-[38px]">
+                                            <span x-text="formData.rujukan.id_tarif_ambulan ? formatRp((ambulanceTarifs.find(t => t.kode === formData.rujukan.id_tarif_ambulan) || {}).harga || 0) : 'Rp 0'"></span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </template>
+
+                        <!-- Panel Catatan Tambahan -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mt-6">
+                            <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 flex items-center">
+                                <svg class="mr-2 text-gray-500" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                Catatan Tambahan
+                            </h2>
+                            <div>
+                                <textarea x-model="formData.catatan" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Ketik catatan khusus terkait kondisi pasien, instruksi, atau alergi (Opsional)..."></textarea>
+                            </div>
+                        </div>
 
                         <!-- Panel Petugas Pemeriksa -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -1350,10 +1399,17 @@
                                             
                                             <!-- Khusus Tampil Rujukan -->
                                             <template x-if="formData.unit_asal === 'UGD/Gawat Darurat' && formData.rujukan.status">
-                                                <div class="col-span-2 grid grid-cols-2 gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
+                                                <div class="col-span-2 grid grid-cols-[100px_1fr] gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
                                                     <div class="text-amber-600 font-medium col-span-2">Data Rujukan:</div>
-                                                    <div class="text-gray-500">Tujuan RS:</div><div class="font-medium text-gray-900" x-text="formData.rujukan.alasan || '-'"></div>
-                                                    <div class="text-gray-500">Transportasi:</div><div class="font-medium text-gray-900" x-text="formData.rujukan.transportasi"></div>
+                                                    <div class="text-gray-500">Tujuan RS:</div><div class="font-medium text-gray-900" x-text="(ambulanceTarifs.find(t => t.kode === formData.rujukan.id_tarif_ambulan) || {}).nama || '-'"></div>
+                                                </div>
+                                            </template>
+
+                                            <!-- Tampil Catatan di Preview -->
+                                            <template x-if="formData.catatan">
+                                                <div class="col-span-2 mt-2 pt-2 border-t border-gray-200 text-sm">
+                                                    <div class="text-gray-500 mb-1">Catatan:</div>
+                                                    <div class="font-medium text-gray-800 bg-amber-50 p-2.5 rounded border border-amber-100 whitespace-pre-line" x-text="formData.catatan"></div>
                                                 </div>
                                             </template>
                                         </div>
@@ -1366,25 +1422,51 @@
                                             <table class="w-full text-sm text-left">
                                                 <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                     <tr>
-                                                        <th class="px-3 py-2 text-center w-10">No</th>
+                                                        <th class="px-3 py-2 text-center w-10"></th>
                                                         <th class="px-3 py-2">Tindakan</th>
                                                         <th class="px-3 py-2 text-center">Qty</th>
                                                         <th class="px-3 py-2 text-right">Subtotal</th>
                                                     </tr>
                                                 </thead>
-                                                <tbody class="divide-y divide-gray-200">
-                                                    <template x-if="formData.rincian_biaya.length === 0">
+                                                
+                                                <template x-if="formData.rincian_biaya.length === 0">
+                                                    <tbody>
                                                         <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Belum ada tindakan yang diinput</td></tr>
-                                                    </template>
-                                                    <template x-for="(item, idx) in formData.rincian_biaya" :key="item.kode">
-                                                        <tr class="bg-white">
-                                                            <td class="px-3 py-2 text-center" x-text="idx + 1"></td>
-                                                            <td class="px-3 py-2" x-text="item.nama"></td>
-                                                            <td class="px-3 py-2 text-center" x-text="item.qty"></td>
-                                                            <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
+                                                    </tbody>
+                                                </template>
+                                                
+                                                <!-- Pengelompokan Kategori Biaya Sesuai Urutan -->
+                                                <template x-for="group in layananGroups" :key="group.id">
+                                                    <tbody x-show="formData.rincian_biaya.some(r => r.groupId === group.id)">
+                                                        <tr class="bg-gray-50 border-y border-gray-200">
+                                                            <td colspan="4" class="px-3 py-2 text-xs font-bold text-gray-800" x-text="group.name"></td>
                                                         </tr>
-                                                    </template>
-                                                </tbody>
+                                                        <template x-for="(item, idx) in formData.rincian_biaya" :key="item.kode + '_' + idx">
+                                                            <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
+                                                                <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                                <td class="px-3 py-2" x-text="item.nama"></td>
+                                                                <td class="px-3 py-2 text-center" x-text="item.qty"></td>
+                                                                <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
+                                                            </tr>
+                                                        </template>
+                                                    </tbody>
+                                                </template>
+
+                                                <!-- Tambahan Rincian Ambulans di Paling Bawah -->
+                                                <template x-if="formData.unit_asal === 'UGD/Gawat Darurat' && formData.rujukan.status && formData.rujukan.id_tarif_ambulan">
+                                                    <tbody>
+                                                        <tr class="bg-amber-50 border-y border-amber-200">
+                                                            <td colspan="4" class="px-3 py-2 text-xs font-bold text-amber-800">F. AMBULANS / RUJUKAN</td>
+                                                        </tr>
+                                                        <tr class="bg-white border-b border-gray-100">
+                                                            <td class="px-3 py-2 text-center text-amber-500 font-bold">🚑</td>
+                                                            <td class="px-3 py-2" x-text="'Ambulans Tujuan: ' + ((ambulanceTarifs.find(t => t.kode === formData.rujukan.id_tarif_ambulan) || {}).nama || '-')"></td>
+                                                            <td class="px-3 py-2 text-center">1</td>
+                                                            <td class="px-3 py-2 text-right font-medium" x-text="formatRp((ambulanceTarifs.find(t => t.kode === formData.rujukan.id_tarif_ambulan) || {}).harga || 0)"></td>
+                                                        </tr>
+                                                    </tbody>
+                                                </template>
+
                                                 <tfoot class="bg-gray-50 font-bold border-t border-gray-200">
                                                     <tr>
                                                         <td colspan="3" class="px-3 py-3 text-right text-gray-700">TOTAL KESELURUHAN</td>
@@ -1443,10 +1525,17 @@
                                                 
                                                 <!-- Khusus Tampil Rujukan -->
                                                 <template x-if="selectedVisit.unit_asal === 'UGD/Gawat Darurat' && selectedVisit.rujukan?.status">
-                                                    <div class="col-span-2 grid grid-cols-2 gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
+                                                    <div class="col-span-2 grid grid-cols-[100px_1fr] gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
                                                         <div class="text-amber-600 font-medium col-span-2">Data Rujukan:</div>
-                                                        <div class="text-gray-500">Tujuan RS:</div><div class="font-medium text-gray-900" x-text="selectedVisit.rujukan.alasan || '-'"></div>
-                                                        <div class="text-gray-500">Transportasi:</div><div class="font-medium text-gray-900" x-text="selectedVisit.rujukan.transportasi"></div>
+                                                        <div class="text-gray-500">Tujuan RS:</div><div class="font-medium text-gray-900" x-text="selectedVisit.rujukan.rs_tujuan || '-'"></div>
+                                                    </div>
+                                                </template>
+
+                                                <!-- Tampil Catatan di Preview Kunjungan -->
+                                                <template x-if="selectedVisit.catatan">
+                                                    <div class="col-span-2 mt-2 pt-2 border-t border-gray-200 text-sm">
+                                                        <div class="text-gray-500 mb-1">Catatan:</div>
+                                                        <div class="font-medium text-gray-800 bg-amber-50 p-2.5 rounded border border-amber-100 whitespace-pre-line" x-text="selectedVisit.catatan"></div>
                                                     </div>
                                                 </template>
                                             </div>
@@ -1459,25 +1548,51 @@
                                                 <table class="w-full text-sm text-left">
                                                     <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                         <tr>
-                                                            <th class="px-3 py-2 text-center w-10">No</th>
+                                                            <th class="px-3 py-2 text-center w-10"></th>
                                                             <th class="px-3 py-2">Tindakan</th>
                                                             <th class="px-3 py-2 text-center">Qty</th>
                                                             <th class="px-3 py-2 text-right">Subtotal</th>
                                                         </tr>
                                                     </thead>
-                                                    <tbody class="divide-y divide-gray-200">
-                                                        <template x-if="!selectedVisit.rincian_biaya || selectedVisit.rincian_biaya.length === 0">
+                                                    
+                                                    <template x-if="!selectedVisit.rincian_biaya || selectedVisit.rincian_biaya.length === 0">
+                                                        <tbody>
                                                             <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Tidak ada tindakan</td></tr>
-                                                        </template>
-                                                        <template x-for="(item, idx) in selectedVisit.rincian_biaya" :key="item.kode">
-                                                            <tr class="bg-white">
-                                                                <td class="px-3 py-2 text-center" x-text="idx + 1"></td>
-                                                                <td class="px-3 py-2" x-text="item.nama"></td>
-                                                                <td class="px-3 py-2 text-center" x-text="item.qty"></td>
-                                                                <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
+                                                        </tbody>
+                                                    </template>
+                                                    
+                                                    <!-- Pengelompokan Kategori Biaya Sesuai Urutan di Daftar Riwayat -->
+                                                    <template x-for="group in layananGroups" :key="group.id">
+                                                        <tbody x-show="selectedVisit.rincian_biaya?.some(r => r.groupId === group.id)">
+                                                            <tr class="bg-gray-50 border-y border-gray-200">
+                                                                <td colspan="4" class="px-3 py-2 text-xs font-bold text-gray-800" x-text="group.name"></td>
                                                             </tr>
-                                                        </template>
-                                                    </tbody>
+                                                            <template x-for="(item, idx) in selectedVisit.rincian_biaya" :key="item.kode + '_' + idx">
+                                                                <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
+                                                                    <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                                    <td class="px-3 py-2" x-text="item.nama"></td>
+                                                                    <td class="px-3 py-2 text-center" x-text="item.qty"></td>
+                                                                    <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
+                                                                </tr>
+                                                            </template>
+                                                        </tbody>
+                                                    </template>
+
+                                                    <!-- Tambahan Rincian Ambulans di Paling Bawah -->
+                                                    <template x-if="selectedVisit.rujukan?.status">
+                                                        <tbody>
+                                                            <tr class="bg-amber-50 border-y border-amber-200">
+                                                                <td colspan="4" class="px-3 py-2 text-xs font-bold text-amber-800">F. AMBULANS / RUJUKAN</td>
+                                                            </tr>
+                                                            <tr class="bg-white border-b border-gray-100">
+                                                                <td class="px-3 py-2 text-center text-amber-500 font-bold">🚑</td>
+                                                                <td class="px-3 py-2" x-text="'Ambulans Tujuan: ' + (selectedVisit.rujukan.rs_tujuan || '-')"></td>
+                                                                <td class="px-3 py-2 text-center">1</td>
+                                                                <td class="px-3 py-2 text-right font-medium" x-text="formatRp(selectedVisit.rujukan.biaya || 0)"></td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </template>
+
                                                     <tfoot class="bg-gray-50 font-bold border-t border-gray-200">
                                                         <tr>
                                                             <td colspan="3" class="px-3 py-3 text-right text-gray-700">TOTAL KESELURUHAN</td>
