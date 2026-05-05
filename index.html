@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Pencatatan Biaya Puskesmas</title>
+    
+    <!-- Mencegah error favicon 404 -->
+    <link rel="icon" href="data:,">
+    
+    <!-- Tailwind CSS (via CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Penangkap Error Darurat -->
+    <script>
+        window.addEventListener('error', function(e) {
+            if (e.message.includes('export') || e.message.includes('module')) {
+                alert("Kesalahan Skrip: " + e.message);
+                const loader = document.querySelector('.fixed.inset-0.bg-gray-50');
+                if (loader) loader.style.display = 'none';
+            }
+        });
+    </script>
+
+    <style>
+        [x-cloak] { display: none !important; }
+        /* Kustom scrollbar untuk daftar tindakan agar rapi */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+
+    <!-- Modul Logika Aplikasi (Dijalankan secara berurutan sebelum Alpine) -->
+    <script type="module">
+        import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/module.esm.js';
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, updateDoc, initializeFirestore, persistentLocalCache } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Konfigurasi Kustom Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyAWEEfnRBB9NMx6mwhxO12jtw1OSzGcGXA",
+            authDomain: "puskesmas-layanan.firebaseapp.com",
+            projectId: "puskesmas-layanan",
+            storageBucket: "puskesmas-layanan.firebasestorage.app",
+            messagingSenderId: "372306338054",
+            appId: "1:372306338054:web:d8436b2385f3915aa2fe87"
+        };
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        
+        // Aktifkan mode Offline menggunakan standar baru Firebase v11
+        const db = initializeFirestore(app, {
+            localCache: persistentLocalCache()
+        });
+
+        const appId = 'puskesmas-layanan';
+
+        // Mendaftarkan logic Alpine Component
+        Alpine.data('puskesmasApp', () => ({
+            user: null,
+            activeTab: 'kunjungan',
+            isLoading: true,
+            isOffline: !navigator.onLine,
+            notification: { show: false, message: '', type: 'success' },
+            tarifs: [],
+            visits: [],
+            kategoriList: ['Semua'],
+
+            // State untuk Login / Register
+            email: '',
+            password: '',
+            isLoginMode: true,
+
+            // State untuk Manajemen Tarif
+            isTarifModalOpen: false,
+            isEditMode: false,
+            formTarif: { kode: '', nama: '', kategori: '', harga: 0, aktif: true },
+
+            formData: {
+                id_pasien: '',
+                umur: '',
+                alamat: '',
+                unit_asal: 'UGD/Gawat Darurat',
+                rujukan: { status: false, alasan: '', transportasi: 'Kendaraan Sendiri / Keluarga' },
+                rincian_biaya: [],
+                status_pembayaran: 'belum',
+                pembayaran: { jumlah_dibayar: '' }
+            },
+
+            tindakanInput: { kategoriFilter: 'Semua' },
+            searchTarif: '', // State pencarian live
+
+            get totalBiaya() {
+                return this.formData.rincian_biaya.reduce((sum, item) => sum + item.subtotal, 0);
+            },
+
+            get kembalian() {
+                const bayar = parseInt(this.formData.pembayaran.jumlah_dibayar) || 0;
+                return bayar - this.totalBiaya;
+            },
+
+            get filteredTarifs() {
+                let active = this.tarifs.filter(t => t.aktif !== false);
+                
+                // Filter Kategori
+                if (this.tindakanInput.kategoriFilter !== 'Semua') {
+                    active = active.filter(t => t.kategori === this.tindakanInput.kategoriFilter);
+                }
+                
+                // Pencarian Live (Nama / Kode)
+                if (this.searchTarif.trim() !== '') {
+                    const q = this.searchTarif.toLowerCase();
+                    active = active.filter(t => t.nama.toLowerCase().includes(q) || t.kode.toLowerCase().includes(q));
+                }
+                
+                return active;
+            },
+
+            init() {
+                window.addEventListener('online', () => this.isOffline = false);
+                window.addEventListener('offline', () => this.isOffline = true);
+
+                this.$watch('formData.unit_asal', () => this.checkAmbulance());
+                this.$watch('formData.rujukan.status', () => this.checkAmbulance());
+                this.$watch('formData.rujukan.transportasi', () => this.checkAmbulance());
+
+                // FAIL-SAFE: Timeout jika Firebase gagal inisialisasi akibat cache/blokir
+                const loadingTimeout = setTimeout(() => {
+                    if (this.isLoading) {
+                        this.isLoading = false;
+                        this.showNotification("Gagal memuat sistem: Koneksi terblokir atau cache bermasalah. Harap tekan Ctrl + F5.", "error");
+                    }
+                }, 8000); // Batas tunggu 8 detik
+
+                onAuthStateChanged(auth, (user) => {
+                    clearTimeout(loadingTimeout); // Berhasil terhubung, batalkan fail-safe
+                    this.user = user;
+                    this.isLoading = false;
+                    if (user) {
+                        this.listenToFirestore();
+                    } else {
+                        this.tarifs = [];
+                        this.visits = [];
+                    }
+                });
+            },
+
+            async handleLogin() {
+                this.isLoading = true;
+                try {
+                    if (this.isLoginMode) {
+                        await signInWithEmailAndPassword(auth, this.email, this.password);
+                        this.showNotification("Login berhasil!", "success");
+                    } else {
+                        await createUserWithEmailAndPassword(auth, this.email, this.password);
+                        this.showNotification("Akun berhasil dibuat dan otomatis masuk!", "success");
+                    }
+                    this.email = '';
+                    this.password = '';
+                } catch (error) {
+                    this.showNotification(error.message, "error");
+                    this.isLoading = false;
+                }
+            },
+
+            async handleLogout() {
+                try {
+                    await signOut(auth);
+                    this.showNotification("Berhasil keluar dari sistem.", "success");
+                } catch (error) {
+                    this.showNotification("Gagal keluar: " + error.message, "error");
+                }
+            },
+
+            listenToFirestore() {
+                onSnapshot(
+                    collection(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan'), 
+                    (snap) => {
+                        const t = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.kode.localeCompare(b.kode));
+                        this.tarifs = t;
+                        this.kategoriList = ['Semua', ...new Set(t.map(x => x.kategori))];
+                    },
+                    (error) => {
+                        console.error("Error tarif:", error);
+                        if(error.code === 'permission-denied') this.showNotification("Akses ditolak: Periksa Firestore Rules.", "error");
+                    }
+                );
+
+                onSnapshot(
+                    collection(db, 'artifacts', appId, 'public', 'data', 'kunjungan'), 
+                    (snap) => {
+                        this.visits = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => {
+                            const timeA = a.timestamp?.toMillis() || Date.now();
+                            const timeB = b.timestamp?.toMillis() || Date.now();
+                            return timeB - timeA;
+                        });
+                    },
+                    (error) => {
+                        console.error("Error kunjungan:", error);
+                    }
+                );
+            },
+
+            checkAmbulance() {
+                if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status && this.formData.rujukan.transportasi === 'Ambulans Puskesmas') {
+                    const hasAmbulans = this.formData.rincian_biaya.some(item => item.kode === 'AMB-001');
+                    if (!hasAmbulans) {
+                        const tarifAmb = this.tarifs.find(t => t.kode === 'AMB-001');
+                        if (tarifAmb) {
+                            this.tambahKeRincian(tarifAmb, 1, true);
+                            this.showNotification("Tarif Ambulans ditambahkan secara otomatis.", "success");
+                        }
+                    }
+                } else {
+                    this.formData.rincian_biaya = this.formData.rincian_biaya.filter(item => !item.isAutoAddedAmbulance);
+                }
+            },
+
+            tambahKeRincian(tarifObj, qty, isAuto = false) {
+                if (!tarifObj || qty <= 0) return;
+                const existingIndex = this.formData.rincian_biaya.findIndex(item => item.kode === tarifObj.kode && !item.isAutoAddedAmbulance);
+                
+                if (existingIndex >= 0) {
+                    this.formData.rincian_biaya[existingIndex].qty += qty;
+                    this.formData.rincian_biaya[existingIndex].subtotal = this.formData.rincian_biaya[existingIndex].qty * this.formData.rincian_biaya[existingIndex].harga_satuan;
+                } else {
+                    this.formData.rincian_biaya.push({
+                        kode: tarifObj.kode,
+                        nama: tarifObj.nama,
+                        harga_satuan: tarifObj.harga,
+                        qty: qty,
+                        subtotal: tarifObj.harga * qty,
+                        isAutoAddedAmbulance: isAuto
+                    });
+                }
+            },
+            
+            tambahQty(idx) {
+                this.formData.rincian_biaya[idx].qty++;
+                this.formData.rincian_biaya[idx].subtotal = this.formData.rincian_biaya[idx].qty * this.formData.rincian_biaya[idx].harga_satuan;
+            },
+            
+            kurangiQty(idx) {
+                if (this.formData.rincian_biaya[idx].qty > 1) {
+                    this.formData.rincian_biaya[idx].qty--;
+                    this.formData.rincian_biaya[idx].subtotal = this.formData.rincian_biaya[idx].qty * this.formData.rincian_biaya[idx].harga_satuan;
+                } else {
+                    this.hapusRincian(idx);
+                }
+            },
+
+            hapusRincian(index) {
+                this.formData.rincian_biaya.splice(index, 1);
+            },
+
+            async handleSubmit() {
+                if (!this.formData.id_pasien) return this.showNotification("Nama Pasien harus diisi", "error");
+                if (this.formData.rincian_biaya.length === 0) return this.showNotification("Tambahkan minimal 1 tindakan/layanan", "error");
+                if (this.formData.status_pembayaran === 'lunas' && this.kembalian < 0) return this.showNotification("Jumlah bayar kurang dari total biaya!", "error");
+
+                const payload = {
+                    id_pasien: this.formData.id_pasien,
+                    umur: this.formData.umur,
+                    alamat: this.formData.alamat,
+                    tanggal: new Date().toLocaleDateString('id-ID'),
+                    timestamp: serverTimestamp(),
+                    unit_asal: this.formData.unit_asal,
+                    rincian_biaya: this.formData.rincian_biaya.map(i => ({...i})), 
+                    total_biaya: this.totalBiaya,
+                    status_pembayaran: this.formData.status_pembayaran,
+                };
+
+                if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status) {
+                    payload.rujukan = { status: true, alasan: this.formData.rujukan.alasan, transportasi: this.formData.rujukan.transportasi };
+                }
+
+                if (this.formData.status_pembayaran === 'lunas') {
+                    payload.pembayaran = {
+                        metode: 'Tunai',
+                        jumlah_dibayar: parseInt(this.formData.pembayaran.jumlah_dibayar),
+                        kembalian: this.kembalian,
+                        waktu: new Date().toISOString()
+                    };
+                }
+
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'kunjungan'), payload);
+                    this.showNotification("Data kunjungan berhasil disimpan!", "success");
+                    this.resetForm();
+                } catch (err) {
+                    this.showNotification("Gagal menyimpan: " + err.message, "error");
+                }
+            },
+
+            resetForm() {
+                this.formData = {
+                    id_pasien: '', umur: '', alamat: '', unit_asal: 'UGD/Gawat Darurat',
+                    rujukan: { status: false, alasan: '', transportasi: 'Kendaraan Sendiri / Keluarga' },
+                    rincian_biaya: [], status_pembayaran: 'belum', pembayaran: { jumlah_dibayar: '' }
+                };
+                this.searchTarif = '';
+                this.activeTab = 'kunjungan';
+            },
+
+            async handleLunasi(visitId, totalBiaya) {
+                const bayar = window.prompt(`Masukkan jumlah uang yang dibayarkan untuk Tagihan ${this.formatRp(totalBiaya)}:`);
+                if (bayar !== null) {
+                    const jmlBayar = parseInt(bayar.replace(/\D/g, ''));
+                    if (isNaN(jmlBayar) || jmlBayar < totalBiaya) {
+                        return this.showNotification("Jumlah bayar tidak valid atau kurang.", "error");
+                    }
+                    
+                    try {
+                        const visitRef = doc(db, 'artifacts', appId, 'public', 'data', 'kunjungan', visitId);
+                        await updateDoc(visitRef, {
+                            status_pembayaran: 'lunas',
+                            pembayaran: { metode: 'Tunai', jumlah_dibayar: jmlBayar, kembalian: jmlBayar - totalBiaya, waktu: new Date().toISOString() }
+                        });
+                        this.showNotification("Pembayaran berhasil dicatat!");
+                    } catch (error) {
+                        this.showNotification("Gagal memproses pembayaran: " + error.message, "error");
+                    }
+                }
+            },
+
+            // --- FUNGSI CETAK STRUK/KWITANSI --- //
+            cetakKwitansi(visit) {
+                const win = window.open('', '_blank');
+                if (!win) {
+                    return this.showNotification("Popup terblokir! Izinkan pop-up untuk mencetak.", "error");
+                }
+
+                let rincianHtml = '';
+                visit.rincian_biaya.forEach((item, index) => {
+                    rincianHtml += `
+                        <tr>
+                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: center;">${index + 1}</td>
+                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc;">${item.nama}</td>
+                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.qty}</td>
+                            <td style="padding: 6px 0; border-bottom: 1px dashed #ccc; text-align: right;">${this.formatRp(item.subtotal)}</td>
+                        </tr>
+                    `;
+                });
+
+                let rujukanText = 'Tidak';
+                let transportText = '-';
+                
+                if (visit.rujukan && visit.rujukan.status) {
+                    rujukanText = `Ya, ke ${visit.rujukan.alasan || 'Rumah Sakit Tujuan'}`;
+                    transportText = visit.rujukan.transportasi;
+                    if (transportText === 'Ambulans Puskesmas') {
+                        transportText += ' (Sesuai Tarif)';
+                    } else if (transportText === 'Kendaraan Sendiri / Keluarga') {
+                        transportText += ' (Biaya 0)';
+                    }
+                }
+
+                const officerName = this.user && this.user.email ? this.user.email.split('@')[0] : 'Petugas';
+
+                // Menggunakan teknik pemisahan string tag script agar tidak terdeteksi sebagai penutup kode oleh browser
+                const htmlContent = `
+                    <html>
+                    <head>
+                        <title>Kwitansi - ${visit.id_pasien}</title>
+                        <style>
+                            body { font-family: 'Courier New', Courier, monospace; color: #000; line-height: 1.4; font-size: 14px; margin: 0; padding: 20px; }
+                            .receipt-container { max-width: 600px; margin: 0 auto; }
+                            .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 15px; margin-bottom: 15px; }
+                            .info-grid { display: grid; grid-template-columns: 120px 1fr; gap: 4px; margin-bottom: 20px; }
+                            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+                            th { text-align: left; border-top: 1px dashed #000; border-bottom: 2px dashed #000; padding: 8px 0; }
+                            .footer { text-align: center; border-top: 2px dashed #000; padding-top: 15px; margin-top: 30px; font-weight: bold;}
+                            .print-btn { display: block; margin: 20px auto; padding: 10px 20px; font-size: 16px; cursor: pointer; }
+                            @media print { 
+                                .print-btn { display: none; }
+                                body { padding: 0; }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="receipt-container">
+                            <div class="header">
+                                <h2 style="margin: 0 0 5px 0; font-size: 18px;">RINCIAN BIAYA PELAYANAN</h2>
+                                <h3 style="margin: 0; font-size: 16px;">RUANG ${visit.unit_asal.toUpperCase()}</h3>
+                            </div>
+                            
+                            <div class="info-grid">
+                                <div>Tanggal</div><div>: ${visit.tanggal}</div>
+                                <div>Ruang</div><div>: ${visit.unit_asal}</div>
+                                <div>Nama Pasien</div><div>: ${visit.id_pasien}</div>
+                                <div>Umur</div><div>: ${visit.umur ? visit.umur + ' tahun' : '-'}</div>
+                                <div>Alamat</div><div>: ${visit.alamat || '-'}</div>
+                            </div>
+
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 8%; text-align: center;">No</th>
+                                        <th style="width: 50%;">Jenis Pelayanan</th>
+                                        <th style="width: 12%; text-align: center;">Jumlah</th>
+                                        <th style="width: 30%; text-align: right;">Tarif (Rp)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rincianHtml}
+                                </tbody>
+                            </table>
+
+                            <div style="text-align: right; font-size: 16px; margin-bottom: 20px;">
+                                <strong>TOTAL : ${this.formatRp(visit.total_biaya)}</strong>
+                            </div>
+
+                            <div style="margin-bottom: 20px;">
+                                <div style="display: flex; margin-bottom: 4px;">
+                                    <div style="width: 150px;">Rujuk</div>
+                                    <div>: ${rujukanText}</div>
+                                </div>
+                                <div style="display: flex;">
+                                    <div style="width: 150px;">Transportasi</div>
+                                    <div>: ${transportText}</div>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 40px; text-align: right;">
+                                Petugas ${visit.unit_asal}<br><br><br>
+                                ( ${officerName} )
+                            </div>
+
+                            <div class="footer">
+                                TERIMA KASIH - SEMOGA LEKAS SEMBUH
+                            </div>
+                            
+                            <button class="print-btn" onclick="window.print()">🖨️ Cetak Struk</button>
+                        </div>
+                        <script>
+                            window.onload = function() { setTimeout(function() { window.print(); }, 500); }
+                        ${'<'}/script>
+                    </body>
+                    </html>
+                `;
+
+                win.document.write(htmlContent);
+                win.document.close();
+            },
+
+            // --- FUNGSI MANAJEMEN TARIF --- //
+            openModalTarif(isEdit, tarifData = null) {
+                this.isEditMode = isEdit;
+                if (isEdit && tarifData) {
+                    this.formTarif = { ...tarifData };
+                } else {
+                    this.formTarif = { kode: '', nama: '', kategori: 'Tindakan Medik Umum', harga: 0, aktif: true };
+                }
+                this.isTarifModalOpen = true;
+            },
+
+            closeModalTarif() {
+                this.isTarifModalOpen = false;
+            },
+
+            async saveTarif() {
+                if (!this.formTarif.kode || !this.formTarif.nama) {
+                    return this.showNotification("Kode dan Nama wajib diisi!", "error");
+                }
+                
+                try {
+                    const sanitizedKode = this.formTarif.kode.replace(/\s+/g, '-').toUpperCase();
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan', sanitizedKode);
+                    await setDoc(docRef, {
+                        kode: sanitizedKode,
+                        nama: this.formTarif.nama,
+                        kategori: this.formTarif.kategori,
+                        harga: Number(this.formTarif.harga),
+                        aktif: this.formTarif.aktif
+                    });
+                    
+                    this.showNotification("Tarif berhasil disimpan!", "success");
+                    this.closeModalTarif();
+                } catch (error) {
+                    this.showNotification("Gagal menyimpan tarif: " + error.message, "error");
+                }
+            },
+
+            async toggleTarifStatus(kode, currentStatus) {
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan', kode);
+                    await updateDoc(docRef, { aktif: !currentStatus });
+                    this.showNotification("Status tarif berhasil diperbarui!", "success");
+                } catch (error) {
+                    this.showNotification("Gagal mengubah status: " + error.message, "error");
+                }
+            },
+
+            exportTarif() {
+                if (this.tarifs.length === 0) return this.showNotification("Data kosong, tidak ada yang diexport.", "error");
+                const dataStr = JSON.stringify(this.tarifs, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `Tarif_Puskesmas_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                this.showNotification("Data berhasil diexport!", "success");
+            },
+
+            handleImportTarif(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const importedData = JSON.parse(e.target.result);
+                        if (!Array.isArray(importedData)) {
+                            throw new Error("Format JSON tidak valid (harus berupa Array list tarif).");
+                        }
+
+                        this.isLoading = true;
+                        let count = 0;
+                        
+                        for (const tarif of importedData) {
+                            if (tarif.kode && tarif.nama) {
+                                const sanitizedKode = String(tarif.kode).replace(/\s+/g, '-').toUpperCase();
+                                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan', sanitizedKode);
+                                
+                                await setDoc(docRef, {
+                                    kode: sanitizedKode,
+                                    nama: tarif.nama,
+                                    kategori: tarif.kategori || 'Lain-lain',
+                                    harga: Number(tarif.harga) || 0,
+                                    aktif: tarif.aktif !== undefined ? tarif.aktif : true
+                                });
+                                count++;
+                            }
+                        }
+                        this.showNotification(`${count} Data tarif berhasil diimport!`, "success");
+                    } catch (error) {
+                        this.showNotification("Gagal import: " + error.message, "error");
+                    } finally {
+                        this.isLoading = false;
+                        event.target.value = ''; 
+                    }
+                };
+                
+                reader.onerror = () => {
+                    this.showNotification("Gagal membaca file.", "error");
+                    this.isLoading = false;
+                };
+
+                reader.readAsText(file);
+            },
+
+            showNotification(msg, type = 'success') {
+                this.notification = { show: true, message: msg, type: type };
+                setTimeout(() => { this.notification.show = false; }, 4000);
+            },
+
+            formatRp(angka) {
+                return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+            }
+        }));
+
+        window.Alpine = Alpine;
+        Alpine.start();
+    </script>
+</head>
+<body class="bg-gray-50 font-sans text-gray-800 pb-12" x-data="puskesmasApp()">
+
+    <!-- Loading Screen -->
+    <div x-show="isLoading" class="fixed inset-0 bg-gray-50 flex items-center justify-center z-50">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+    </div>
+
+    <!-- Notification Container (Global) -->
+    <template x-if="notification.show">
+        <div class="fixed top-4 right-4 z-50 mb-6 p-4 rounded-lg flex items-center space-x-3 shadow-lg" :class="notification.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'">
+            <template x-if="notification.type === 'success'">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            </template>
+            <template x-if="notification.type === 'error'">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            </template>
+            <span class="font-medium" x-text="notification.message"></span>
+        </div>
+    </template>
+
+    <div x-cloak x-show="!isLoading">
+        
+        <!-- HALAMAN LOGIN / REGISTER -->
+        <div x-show="!user" class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 bg-gray-100">
+            <div class="max-w-md w-full space-y-8 bg-white p-8 rounded-xl shadow-md border border-gray-200">
+                <div class="text-center flex flex-col items-center">
+                    <div class="bg-green-500 p-3 rounded-full text-white inline-block mb-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    </div>
+                    <h2 class="text-3xl font-bold text-gray-900">Sistem Puskesmas</h2>
+                    <h3 class="mt-2 text-lg text-gray-600" x-text="isLoginMode ? 'Login Petugas' : 'Daftar Akun Baru'"></h3>
+                </div>
+                <form class="mt-8 space-y-6" @submit.prevent="handleLogin()">
+                    <div class="rounded-md shadow-sm -space-y-px">
+                        <div>
+                            <label for="email-address" class="sr-only">Email address</label>
+                            <input id="email-address" type="email" x-model="email" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm" placeholder="Email">
+                        </div>
+                        <div>
+                            <label for="password" class="sr-only">Password</label>
+                            <input id="password" type="password" x-model="password" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm" placeholder="Password">
+                        </div>
+                    </div>
+
+                    <div>
+                        <button type="submit" class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                            <span x-text="isLoginMode ? 'Masuk' : 'Daftar Akun'"></span>
+                        </button>
+                    </div>
+                </form>
+                <div class="text-sm text-center">
+                    <button @click="isLoginMode = !isLoginMode; email=''; password=''" class="font-medium text-green-600 hover:text-green-500" x-text="isLoginMode ? 'Belum punya akun? Daftar di sini' : 'Sudah punya akun? Masuk di sini'"></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- HALAMAN UTAMA APLIKASI -->
+        <div x-show="user">
+            <!-- Header -->
+            <header class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+                <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div class="flex justify-between items-center py-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="bg-green-500 p-2 rounded-lg text-white">
+                                <!-- Icon Activity -->
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                            </div>
+                            <div>
+                                <h1 class="text-xl font-bold text-gray-900 leading-tight">Sistem Billing Puskesmas</h1>
+                                <p class="text-xs text-gray-500">Rekam Biaya Pelayanan & Tindakan</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center space-x-4 text-sm">
+                            <template x-if="isOffline">
+                                <span class="flex items-center text-amber-600 bg-amber-50 px-2 py-1 rounded-full text-xs font-medium border border-amber-200">
+                                    <svg class="mr-1" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"></line><path d="M8.5 16.5a5 5 0 0 1 7 0"></path><path d="M2 8.82a15 15 0 0 1 4.17-2.65"></path><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.82"></path></svg>
+                                    Offline Mode
+                                </span>
+                            </template>
+                            <span class="text-gray-500 hidden sm:inline-block">
+                                User: <span class="font-mono bg-gray-100 px-1 rounded" x-text="user ? user.email : '---'"></span>
+                            </span>
+                            <button @click="handleLogout()" class="text-red-600 hover:text-red-800 flex items-center text-sm font-medium border border-red-200 bg-red-50 px-3 py-1.5 rounded-lg transition-colors">
+                                <svg class="mr-1.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                                Keluar
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <nav class="flex space-x-8 mt-2 overflow-x-auto">
+                        <button @click="activeTab = 'kunjungan'" :class="activeTab === 'kunjungan' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'" class="flex items-center space-x-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                            <span>Daftar Kunjungan</span>
+                        </button>
+                        <button @click="activeTab = 'tambah'" :class="activeTab === 'tambah' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'" class="flex items-center space-x-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+                            <span>Tambah Kunjungan</span>
+                        </button>
+                        <button @click="activeTab = 'tarif'" :class="activeTab === 'tarif' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'" class="flex items-center space-x-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                            <span>Data Tarif Master</span>
+                        </button>
+                    </nav>
+                </div>
+            </header>
+
+            <!-- Main Content Area -->
+            <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+                
+                <!-- TAB: DAFTAR KUNJUNGAN -->
+                <div x-show="activeTab === 'kunjungan'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="p-6 border-b border-gray-200 flex justify-between items-center">
+                        <h2 class="text-lg font-semibold text-gray-800">Riwayat Kunjungan Pasien</h2>
+                        <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full" x-text="'Total: ' + visits.length + ' Kunjungan'"></span>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm text-left text-gray-500">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-4">Tanggal & Waktu</th>
+                                    <th class="px-6 py-4">Nama Pasien</th>
+                                    <th class="px-6 py-4">Unit Asal</th>
+                                    <th class="px-6 py-4 text-right">Total Biaya</th>
+                                    <th class="px-6 py-4 text-center">Status</th>
+                                    <th class="px-6 py-4 text-center">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-if="visits.length === 0">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-8 text-center text-gray-500 italic">Belum ada data kunjungan.</td>
+                                    </tr>
+                                </template>
+                                <template x-for="v in visits" :key="v.id">
+                                    <tr class="bg-white border-b hover:bg-gray-50">
+                                        <td class="px-6 py-4 whitespace-nowrap">
+                                            <span x-text="v.tanggal"></span> <br/>
+                                            <span class="text-xs text-gray-400" x-text="v.timestamp ? v.timestamp.toDate().toLocaleTimeString('id-ID') : '-'"></span>
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <div class="font-medium text-gray-900" x-text="v.id_pasien"></div>
+                                            <div class="text-xs text-gray-500 mt-1">
+                                                <span x-show="v.umur" x-text="v.umur + ' thn'"></span>
+                                                <span x-show="v.umur && v.alamat"> | </span>
+                                                <span x-show="v.alamat" x-text="v.alamat"></span>
+                                            </div>
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <span x-text="v.unit_asal || '-'"></span>
+                                            <template x-if="v.rujukan?.status">
+                                                <span class="ml-2 bg-purple-100 text-purple-800 text-[10px] px-2 py-0.5 rounded border border-purple-200">Dirujuk</span>
+                                            </template>
+                                        </td>
+                                        <td class="px-6 py-4 text-right font-semibold" x-text="formatRp(v.total_biaya)"></td>
+                                        <td class="px-6 py-4 text-center">
+                                            <template x-if="v.status_pembayaran === 'lunas'">
+                                                <span class="inline-flex items-center px-2 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-full">
+                                                    <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                                    Lunas
+                                                </span>
+                                            </template>
+                                            <template x-if="v.status_pembayaran !== 'lunas'">
+                                                <span class="inline-flex items-center px-2 py-1 text-xs font-medium text-amber-700 bg-amber-100 rounded-full">
+                                                    <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                                    Belum
+                                                </span>
+                                            </template>
+                                        </td>
+                                        <td class="px-6 py-4 text-center space-x-2">
+                                            <button @click="cetakKwitansi(v)" class="text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">
+                                                Cetak
+                                            </button>
+                                            <template x-if="v.status_pembayaran !== 'lunas'">
+                                                <button @click="handleLunasi(v.id, v.total_biaya)" class="text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors mt-2 lg:mt-0">
+                                                    Lunasi
+                                                </button>
+                                            </template>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- TAB: TAMBAH KUNJUNGAN -->
+                <div x-show="activeTab === 'tambah'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    
+                    <!-- Kolom Kiri: Identitas Pasien & Daftar Tarif -->
+                    <div class="lg:col-span-2 space-y-6">
+                        
+                        <!-- Panel Identitas Pasien -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                            <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">Informasi Pasien</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Nama Pasien *</label>
+                                    <input type="text" x-model="formData.id_pasien" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: Siti Aminah" required>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Umur (Tahun)</label>
+                                    <input type="number" min="0" x-model="formData.umur" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: 35">
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap</label>
+                                    <input type="text" x-model="formData.alamat" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: Dusun Sukamaju, Desa Mekarsari">
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Unit Asal Pelayanan</label>
+                                    <select x-model="formData.unit_asal" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
+                                        <option value="UGD/Gawat Darurat">UGD / Gawat Darurat</option>
+                                        <option value="Rawat Inap">Rawat Inap</option>
+                                        <option value="Kamar Bersalin">Kamar Bersalin</option>
+                                        <option value="Laboratorium">Laboratorium</option>
+                                        <option value="Penunjang Diagnostik">Penunjang Diagnostik</option>
+                                        <option value="Tindakan Medik Umum">Tindakan Medik Umum</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Opsi Rujukan UGD -->
+                            <template x-if="formData.unit_asal === 'UGD/Gawat Darurat'">
+                                <div class="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+                                    <label class="flex items-center space-x-2 text-amber-900 font-medium">
+                                        <input type="checkbox" x-model="formData.rujukan.status" class="rounded text-green-600 focus:ring-green-500">
+                                        <span>Pasien Dirujuk ke RS / Fasilitas Lain?</span>
+                                    </label>
+                                    
+                                    <div x-show="formData.rujukan.status" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4" style="display: none;">
+                                        <div>
+                                            <label class="block text-xs font-medium text-amber-800 mb-1">Tujuan / RS Rujukan</label>
+                                            <input type="text" x-model="formData.rujukan.alasan" class="w-full px-3 py-1.5 text-sm border border-amber-300 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white" placeholder="Contoh: ke RSUD Dr. Soetomo">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-medium text-amber-800 mb-1">Transportasi</label>
+                                            <select x-model="formData.rujukan.transportasi" class="w-full px-3 py-1.5 text-sm border border-amber-300 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white">
+                                                <option value="Kendaraan Sendiri / Keluarga">Kendaraan Sendiri / Keluarga</option>
+                                                <option value="Ambulans Puskesmas">Ambulans Puskesmas</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- PANEL DAFTAR TINDAKAN (POS STYLE) -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                            <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 flex items-center">
+                                <svg class="mr-2 text-green-600" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+                                Tambahkan Tindakan / Layanan
+                            </h2>
+                            
+                            <div class="flex flex-col md:flex-row gap-3 mb-4">
+                                <div class="relative flex-grow">
+                                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <svg class="h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                    </div>
+                                    <input type="text" x-model="searchTarif" placeholder="Ketik nama atau kode tindakan..." class="w-full pl-10 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 focus:bg-white transition-colors">
+                                </div>
+                                <div class="md:w-1/3">
+                                    <select x-model="tindakanInput.kategoriFilter" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
+                                        <template x-for="kat in kategoriList" :key="kat">
+                                            <option :value="kat" x-text="kat"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Daftar Master Tarif Scrollable -->
+                            <div class="h-[300px] overflow-y-auto custom-scrollbar border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
+                                <template x-if="filteredTarifs.length === 0">
+                                    <div class="p-6 text-center text-gray-500 text-sm">
+                                        Tindakan tidak ditemukan.
+                                    </div>
+                                </template>
+                                <template x-for="t in filteredTarifs" :key="t.kode">
+                                    <div class="flex justify-between items-center p-3 hover:bg-green-50 transition-colors group">
+                                        <div class="pr-2">
+                                            <div class="text-sm font-medium text-gray-800" x-text="t.nama"></div>
+                                            <div class="text-xs text-gray-500" x-text="t.kode + ' • ' + formatRp(t.harga)"></div>
+                                        </div>
+                                        <button @click="tambahKeRincian(t, 1)" class="shrink-0 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-600 hover:text-white hover:border-blue-600 text-xs font-semibold transition-colors flex items-center">
+                                            <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                            Tambah
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Panel Tabel Rincian -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                            <div class="p-4 border-b border-gray-200 bg-gray-50">
+                                <h3 class="font-medium text-gray-800">Keranjang Rincian Biaya</h3>
+                            </div>
+                            <table class="w-full text-sm text-left text-gray-600">
+                                <thead class="text-xs text-gray-500 uppercase bg-gray-100">
+                                    <tr>
+                                        <th class="px-4 py-2">Nama Tindakan/Layanan</th>
+                                        <th class="px-4 py-2 text-right">Harga</th>
+                                        <th class="px-4 py-2 text-center w-28">Qty</th>
+                                        <th class="px-4 py-2 text-right">Subtotal</th>
+                                        <th class="px-4 py-2 text-center w-12"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-if="formData.rincian_biaya.length === 0">
+                                        <tr><td colspan="5" class="px-4 py-8 text-center text-gray-400 italic">Silakan tambahkan tindakan dari daftar di atas.</td></tr>
+                                    </template>
+                                    <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
+                                        <tr class="border-b" :class="item.isAutoAddedAmbulance ? 'bg-amber-50' : 'bg-white'">
+                                            <td class="px-4 py-3">
+                                                <div class="font-medium text-gray-800" x-text="item.nama"></div>
+                                                <div class="text-xs text-gray-500 font-mono" x-text="item.kode"></div>
+                                                <template x-if="item.isAutoAddedAmbulance">
+                                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800 mt-1">
+                                                        🚑 Auto
+                                                    </span>
+                                                </template>
+                                            </td>
+                                            <td class="px-4 py-3 text-right" x-text="formatRp(item.harga_satuan)"></td>
+                                            <td class="px-4 py-3">
+                                                <!-- Kontrol Qty Plus Minus -->
+                                                <div class="flex items-center justify-center space-x-2">
+                                                    <button @click="kurangiQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors">-</button>
+                                                    <span x-text="item.qty" class="w-6 text-center font-medium"></span>
+                                                    <button @click="tambahQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors">+</button>
+                                                </div>
+                                            </td>
+                                            <td class="px-4 py-3 text-right font-bold text-gray-800" x-text="formatRp(item.subtotal)"></td>
+                                            <td class="px-4 py-3 text-center">
+                                                <button @click="hapusRincian(idx)" class="text-red-500 hover:text-red-700 text-xs font-medium bg-red-50 p-1.5 rounded">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Kolom Kanan: Ringkasan Pembayaran -->
+                    <div class="lg:col-span-1">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-24">
+                            <h2 class="text-lg font-bold text-gray-800 mb-4">Total & Pembayaran</h2>
+                            
+                            <div class="bg-gray-50 rounded-lg p-4 mb-6 border border-gray-100 text-center">
+                                <div class="text-sm text-gray-500 mb-1">Total Tagihan</div>
+                                <div class="text-3xl font-bold text-green-600" x-text="formatRp(totalBiaya)"></div>
+                            </div>
+
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Status Pembayaran</label>
+                                    <div class="flex space-x-4">
+                                        <label class="flex items-center space-x-2 cursor-pointer">
+                                            <input type="radio" value="belum" x-model="formData.status_pembayaran" class="text-blue-600 focus:ring-blue-500">
+                                            <span class="text-sm">Belum Bayar</span>
+                                        </label>
+                                        <label class="flex items-center space-x-2 cursor-pointer">
+                                            <input type="radio" value="lunas" x-model="formData.status_pembayaran" class="text-green-600 focus:ring-green-500">
+                                            <span class="text-sm font-medium text-green-700">Lunas (Tunai)</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <template x-if="formData.status_pembayaran === 'lunas'">
+                                    <div class="bg-green-50 p-3 rounded-md border border-green-100 space-y-3">
+                                        <div>
+                                            <label class="block text-xs font-medium text-green-800 mb-1">Jumlah Uang Diterima (Rp)</label>
+                                            <input type="number" :min="totalBiaya" x-model="formData.pembayaran.jumlah_dibayar" class="w-full px-3 py-2 text-lg font-medium border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="0">
+                                        </div>
+                                        <div class="flex justify-between items-center text-sm">
+                                            <span class="text-green-800">Kembalian:</span>
+                                            <span class="font-bold" :class="kembalian < 0 ? 'text-red-500' : 'text-green-700'" x-text="formData.pembayaran.jumlah_dibayar ? formatRp(kembalian) : '-'"></span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <button @click="handleSubmit()" class="w-full mt-6 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg flex justify-center items-center transition-colors shadow">
+                                <svg class="mr-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                                Simpan Kunjungan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB: MASTER TARIF -->
+                <div x-show="activeTab === 'tarif'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="p-4 sm:p-6 border-b border-gray-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                        <div>
+                            <h2 class="text-lg font-semibold text-gray-800">Data Master Tarif Layanan</h2>
+                            <p class="text-sm text-gray-500">Kelola tarif Puskesmas sesuai Perda/Ketentuan.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button @click="exportTarif()" class="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
+                                Export JSON
+                            </button>
+                            <label class="bg-white hover:bg-gray-50 text-blue-600 text-sm font-medium py-2 px-3 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer">
+                                Import JSON
+                                <input type="file" accept=".json" class="hidden" @change="handleImportTarif">
+                            </label>
+                            <button @click="openModalTarif(false)" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-sm transition-colors flex items-center">
+                                <svg class="mr-1" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                Tambah Tarif
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto h-[60vh] overflow-y-auto">
+                        <table class="w-full text-sm text-left text-gray-500 relative">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0 shadow-sm z-10">
+                                <tr>
+                                    <th class="px-6 py-3">Kode</th>
+                                    <th class="px-6 py-3">Kategori</th>
+                                    <th class="px-6 py-3">Nama Layanan / Tindakan</th>
+                                    <th class="px-6 py-3 text-right">Harga (Rp)</th>
+                                    <th class="px-6 py-3 text-center">Status</th>
+                                    <th class="px-6 py-3 text-center">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-if="tarifs.length === 0">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-12 text-center">
+                                            <div class="flex flex-col items-center justify-center text-gray-400">
+                                                <svg class="mb-4 opacity-50" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                                                <p class="mb-2">Data tarif masih kosong.</p>
+                                                <p class="text-xs">Silakan Tambah Tarif secara manual atau gunakan tombol Import JSON.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <template x-for="t in tarifs" :key="t.kode">
+                                    <tr class="bg-white border-b hover:bg-gray-50" :class="!t.aktif ? 'opacity-60' : ''">
+                                        <td class="px-6 py-3 font-mono font-medium text-gray-900" x-text="t.kode"></td>
+                                        <td class="px-6 py-3">
+                                            <span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded" x-text="t.kategori"></span>
+                                        </td>
+                                        <td class="px-6 py-3" x-text="t.nama"></td>
+                                        <td class="px-6 py-3 text-right font-medium" x-text="formatRp(t.harga)"></td>
+                                        <td class="px-6 py-3 text-center">
+                                            <template x-if="t.aktif">
+                                                <span class="text-green-600 font-medium text-xs flex items-center justify-center">
+                                                    <svg class="mr-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                                    Aktif
+                                                </span>
+                                            </template>
+                                            <template x-if="!t.aktif">
+                                                <span class="text-red-500 font-medium text-xs">Nonaktif</span>
+                                            </template>
+                                        </td>
+                                        <td class="px-6 py-3 text-center space-x-2">
+                                            <button @click="openModalTarif(true, t)" class="text-blue-600 hover:text-blue-800 text-xs font-medium">Edit</button>
+                                            <button @click="toggleTarifStatus(t.kode, t.aktif)" class="text-xs font-medium" :class="t.aktif ? 'text-red-500 hover:text-red-700' : 'text-green-600 hover:text-green-800'" x-text="t.aktif ? 'Nonaktifkan' : 'Aktifkan'"></button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- MODAL TAMBAH/EDIT TARIF -->
+                <div x-show="isTarifModalOpen" class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true" style="display: none;">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="closeModalTarif()" aria-hidden="true"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                            <form @submit.prevent="saveTarif()">
+                                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                    <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" x-text="isEditMode ? 'Edit Tarif Layanan' : 'Tambah Tarif Baru'"></h3>
+                                    
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700">Kode Layanan</label>
+                                            <input type="text" x-model="formTarif.kode" :disabled="isEditMode" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-500" placeholder="Contoh: UGD-006">
+                                            <p x-show="!isEditMode" class="text-xs text-gray-500 mt-1">Kode harus unik dan tidak mengandung spasi.</p>
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700">Nama Layanan / Tindakan</label>
+                                            <input type="text" x-model="formTarif.nama" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm">
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700">Kategori</label>
+                                            <input type="text" x-model="formTarif.kategori" list="kategori-list" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm" placeholder="Pilih atau ketik kategori baru">
+                                            <datalist id="kategori-list">
+                                                <template x-for="kat in kategoriList.filter(k => k !== 'Semua')" :key="kat">
+                                                    <option :value="kat"></option>
+                                                </template>
+                                            </datalist>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700">Harga (Rp)</label>
+                                            <input type="number" x-model.number="formTarif.harga" required min="0" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm">
+                                        </div>
+
+                                        <div class="flex items-center mt-4">
+                                            <input id="tarif-aktif" type="checkbox" x-model="formTarif.aktif" class="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded">
+                                            <label for="tarif-aktif" class="ml-2 block text-sm text-gray-900">
+                                                Status Aktif (Ditampilkan dalam pilihan saat Kunjungan)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                                    <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm">
+                                        Simpan
+                                    </button>
+                                    <button type="button" @click="closeModalTarif()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                                        Batal
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                
+            </main>
+        </div>
+    </div>
+</body>
+</html>
