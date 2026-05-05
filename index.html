@@ -90,7 +90,7 @@
                 umur: '',
                 alamat: '',
                 unit_asal: 'UGD/Gawat Darurat',
-                rujukan: { status: false, alasan: '', transportasi: 'Kendaraan Sendiri / Keluarga' },
+                rujukan: { status: false, alasan: '', transportasi: 'Ambulans Puskesmas' },
                 rincian_biaya: [],
                 status_pembayaran: 'belum',
                 pembayaran: { jumlah_dibayar: '' }
@@ -307,7 +307,7 @@
             resetForm() {
                 this.formData = {
                     id_pasien: '', umur: '', alamat: '', unit_asal: 'UGD/Gawat Darurat',
-                    rujukan: { status: false, alasan: '', transportasi: 'Kendaraan Sendiri / Keluarga' },
+                    rujukan: { status: false, alasan: '', transportasi: 'Ambulans Puskesmas' },
                     rincian_biaya: [], status_pembayaran: 'belum', pembayaran: { jumlah_dibayar: '' }
                 };
                 this.searchTindakan = '';
@@ -792,30 +792,6 @@
                                     </select>
                                 </div>
                             </div>
-
-                            <!-- Opsi Rujukan UGD -->
-                            <template x-if="formData.unit_asal === 'UGD/Gawat Darurat'">
-                                <div class="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
-                                    <label class="flex items-center space-x-2 text-amber-900 font-medium">
-                                        <input type="checkbox" x-model="formData.rujukan.status" class="rounded text-green-600 focus:ring-green-500">
-                                        <span>Pasien Dirujuk ke RS / Fasilitas Lain?</span>
-                                    </label>
-                                    
-                                    <div x-show="formData.rujukan.status" class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4" style="display: none;">
-                                        <div>
-                                            <label class="block text-xs font-medium text-amber-800 mb-1">Tujuan / RS Rujukan</label>
-                                            <input type="text" x-model="formData.rujukan.alasan" class="w-full px-3 py-1.5 text-sm border border-amber-300 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white" placeholder="Contoh: ke RSUD Dr. Soetomo">
-                                        </div>
-                                        <div>
-                                            <label class="block text-xs font-medium text-amber-800 mb-1">Transportasi</label>
-                                            <select x-model="formData.rujukan.transportasi" class="w-full px-3 py-1.5 text-sm border border-amber-300 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white">
-                                                <option value="Kendaraan Sendiri / Keluarga">Kendaraan Sendiri / Keluarga</option>
-                                                <option value="Ambulans Puskesmas">Ambulans Puskesmas</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-                            </template>
                         </div>
 
                         <!-- PANEL DAFTAR TINDAKAN (POS STYLE) -->
@@ -864,7 +840,7 @@
                         <!-- Panel Tabel Rincian -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full">
                             <div class="p-4 border-b border-gray-200 bg-gray-50">
-                                <h3 class="font-medium text-gray-800">Keranjang Rincian Biaya</h3>
+                                <h3 class="font-medium text-gray-800">Rincian Biaya</h3>
                             </div>
                             <div class="overflow-x-auto w-full custom-scrollbar pb-2">
                                 <!-- Lebar minimum dinaikkan jadi 600px agar tabel tidak memaksakan diri mengecil di HP -->
@@ -915,7 +891,34 @@
                             </div>
                         </div>
 
-                        <!-- Kolom Kanan: Ringkasan Pembayaran -->
+                        <!-- Opsi Rujukan UGD (Dipindah ke bawah Rincian Biaya) -->
+                        <template x-if="formData.unit_asal === 'UGD/Gawat Darurat'">
+                            <div class="p-5 bg-amber-50 rounded-xl border border-amber-200 shadow-sm">
+                                <label class="flex items-center space-x-3 text-amber-900 font-semibold cursor-pointer">
+                                    <input type="checkbox" x-model="formData.rujukan.status" class="rounded text-green-600 focus:ring-green-500 w-5 h-5 cursor-pointer">
+                                    <span>Pasien Dirujuk ke RS / Fasilitas Lain?</span>
+                                </label>
+                                
+                                <div x-show="formData.rujukan.status" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4" style="display: none;">
+                                    <div>
+                                        <label class="block text-sm font-medium text-amber-800 mb-1">Tujuan / RS Rujukan</label>
+                                        <input type="text" x-model="formData.rujukan.alasan" class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white" placeholder="Contoh: ke RSUD Dr. Soetomo">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-amber-800 mb-1">Transportasi</label>
+                                        <select x-model="formData.rujukan.transportasi" class="w-full px-3 py-2 text-sm border border-amber-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white">
+                                            <option value="Ambulans Puskesmas">Ambulans Puskesmas</option>
+                                            <option value="Kendaraan Sendiri / Keluarga">Kendaraan Sendiri / Keluarga</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                    </div>
+
+                    <!-- Kolom Kanan: Ringkasan Pembayaran -->
+                    <div class="lg:col-span-1">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-24">
                             <h2 class="text-lg font-bold text-gray-800 mb-4">Total & Pembayaran</h2>
                             
