@@ -844,6 +844,7 @@
                                 <table class="w-full text-sm text-left text-gray-600 min-w-[600px]">
                                     <thead class="text-xs text-gray-500 uppercase bg-gray-100">
                                         <tr>
+                                            <th class="px-4 py-2 text-center w-12">No</th>
                                             <th class="px-4 py-2">Nama Tindakan/Layanan</th>
                                             <th class="px-4 py-2 text-right">Harga</th>
                                             <th class="px-4 py-2 text-center w-28">Qty</th>
@@ -853,10 +854,11 @@
                                     </thead>
                                     <tbody>
                                         <template x-if="formData.rincian_biaya.length === 0">
-                                            <tr><td colspan="5" class="px-4 py-8 text-center text-gray-400 italic">Silakan tambahkan tindakan dari daftar di atas.</td></tr>
+                                            <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400 italic">Silakan tambahkan tindakan dari daftar di atas.</td></tr>
                                         </template>
                                         <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
                                             <tr class="border-b" :class="item.isAutoAddedAmbulance ? 'bg-amber-50' : 'bg-white'">
+                                                <td class="px-4 py-3 text-center font-medium" x-text="idx + 1"></td>
                                                 <td class="px-4 py-3">
                                                     <div class="font-medium text-gray-800" x-text="item.nama"></div>
                                                     <div class="text-xs text-gray-500 font-mono" x-text="item.kode"></div>
@@ -1108,6 +1110,7 @@
                                             <table class="w-full text-sm text-left">
                                                 <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                     <tr>
+                                                        <th class="px-3 py-2 text-center w-10">No</th>
                                                         <th class="px-3 py-2">Tindakan</th>
                                                         <th class="px-3 py-2 text-center">Qty</th>
                                                         <th class="px-3 py-2 text-right">Subtotal</th>
@@ -1115,10 +1118,11 @@
                                                 </thead>
                                                 <tbody class="divide-y divide-gray-200">
                                                     <template x-if="formData.rincian_biaya.length === 0">
-                                                        <tr><td colspan="3" class="px-3 py-4 text-center text-gray-400 italic">Belum ada tindakan yang diinput</td></tr>
+                                                        <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Belum ada tindakan yang diinput</td></tr>
                                                     </template>
-                                                    <template x-for="item in formData.rincian_biaya" :key="item.kode">
+                                                    <template x-for="(item, idx) in formData.rincian_biaya" :key="item.kode">
                                                         <tr class="bg-white">
+                                                            <td class="px-3 py-2 text-center" x-text="idx + 1"></td>
                                                             <td class="px-3 py-2" x-text="item.nama"></td>
                                                             <td class="px-3 py-2 text-center" x-text="item.qty"></td>
                                                             <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
@@ -1127,7 +1131,7 @@
                                                 </tbody>
                                                 <tfoot class="bg-gray-50 font-bold border-t border-gray-200">
                                                     <tr>
-                                                        <td colspan="2" class="px-3 py-3 text-right text-gray-700">TOTAL KESELURUHAN</td>
+                                                        <td colspan="3" class="px-3 py-3 text-right text-gray-700">TOTAL KESELURUHAN</td>
                                                         <td class="px-3 py-3 text-right text-green-600 text-base" x-text="formatRp(totalBiaya)"></td>
                                                     </tr>
                                                 </tfoot>
