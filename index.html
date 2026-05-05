@@ -83,6 +83,8 @@
             // State untuk Manajemen Tarif & Modal Preview
             isTarifModalOpen: false,
             isPreviewModalOpen: false, // Menambahkan state untuk modal preview
+            isVisitPreviewModalOpen: false, // State modal preview daftar kunjungan
+            selectedVisit: null, // Data kunjungan yang dipilih
             isEditMode: false,
             formTarif: { kode: '', nama: '', kategori: '', harga: 0, aktif: true },
 
@@ -284,7 +286,7 @@
                     unit_asal: this.formData.unit_asal,
                     rincian_biaya: this.formData.rincian_biaya.map(i => ({...i})), 
                     total_biaya: this.totalBiaya,
-                    status_pembayaran: 'belum', // Default otomatis belum bayar
+                    status_pemeriksaan: 'Belum Diperiksa', // Status pemeriksaan default
                 };
 
                 if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status) {
@@ -312,24 +314,21 @@
                 this.activeTab = 'kunjungan';
             },
 
-            async handleLunasi(visitId, totalBiaya) {
-                const bayar = window.prompt(`Masukkan jumlah uang yang dibayarkan untuk Tagihan ${this.formatRp(totalBiaya)}:`);
-                if (bayar !== null) {
-                    const jmlBayar = parseInt(bayar.replace(/\D/g, ''));
-                    if (isNaN(jmlBayar) || jmlBayar < totalBiaya) {
-                        return this.showNotification("Jumlah bayar tidak valid atau kurang.", "error");
-                    }
-                    
-                    try {
-                        const visitRef = doc(db, 'artifacts', appId, 'public', 'data', 'kunjungan', visitId);
-                        await updateDoc(visitRef, {
-                            status_pembayaran: 'lunas',
-                            pembayaran: { metode: 'Tunai', jumlah_dibayar: jmlBayar, kembalian: jmlBayar - totalBiaya, waktu: new Date().toISOString() }
-                        });
-                        this.showNotification("Pembayaran berhasil dicatat!");
-                    } catch (error) {
-                        this.showNotification("Gagal memproses pembayaran: " + error.message, "error");
-                    }
+            openVisitPreview(visit) {
+                this.selectedVisit = visit;
+                this.isVisitPreviewModalOpen = true;
+            },
+
+            async tandaiSudahDiperiksa(visitId) {
+                try {
+                    const visitRef = doc(db, 'artifacts', appId, 'public', 'data', 'kunjungan', visitId);
+                    await updateDoc(visitRef, {
+                        status_pemeriksaan: 'Sudah Diperiksa'
+                    });
+                    this.showNotification("Kunjungan ditandai sudah diperiksa!", "success");
+                    this.isVisitPreviewModalOpen = false;
+                } catch (error) {
+                    this.showNotification("Gagal memperbarui status: " + error.message, "error");
                 }
             },
 
@@ -724,28 +723,23 @@
                                         </td>
                                         <td class="px-6 py-4 text-right font-semibold" x-text="formatRp(v.total_biaya)"></td>
                                         <td class="px-6 py-4 text-center">
-                                            <template x-if="v.status_pembayaran === 'lunas'">
+                                            <template x-if="v.status_pemeriksaan === 'Sudah Diperiksa'">
                                                 <span class="inline-flex items-center px-2 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-full">
                                                     <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
-                                                    Lunas
+                                                    Sudah Diperiksa
                                                 </span>
                                             </template>
-                                            <template x-if="v.status_pembayaran !== 'lunas'">
+                                            <template x-if="v.status_pemeriksaan !== 'Sudah Diperiksa'">
                                                 <span class="inline-flex items-center px-2 py-1 text-xs font-medium text-amber-700 bg-amber-100 rounded-full">
                                                     <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                                                    Belum
+                                                    Menunggu
                                                 </span>
                                             </template>
                                         </td>
-                                        <td class="px-6 py-4 text-center space-x-2">
-                                            <button @click="cetakKwitansi(v)" class="text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">
-                                                Cetak
+                                        <td class="px-6 py-4 text-center">
+                                            <button @click="openVisitPreview(v)" class="text-white bg-blue-600 hover:bg-blue-700 px-4 py-1.5 rounded-lg text-xs font-medium transition-colors shadow-sm">
+                                                Preview
                                             </button>
-                                            <template x-if="v.status_pembayaran !== 'lunas'">
-                                                <button @click="handleLunasi(v.id, v.total_biaya)" class="text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors mt-2 lg:mt-0">
-                                                    Lunasi
-                                                </button>
-                                            </template>
                                         </td>
                                     </tr>
                                 </template>
@@ -1150,6 +1144,97 @@
                                     Tutup Preview
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL PREVIEW DARI DAFTAR KUNJUNGAN -->
+                <div x-show="isVisitPreviewModalOpen" class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-visit-preview-title" role="dialog" aria-modal="true" style="display: none;">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="isVisitPreviewModalOpen = false" aria-hidden="true"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+                            <template x-if="selectedVisit">
+                                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                    <div class="flex justify-between items-center mb-4 pb-2 border-b border-gray-200">
+                                        <h3 class="text-lg leading-6 font-bold text-gray-900" id="modal-visit-preview-title">Detail Kunjungan</h3>
+                                        <button @click="isVisitPreviewModalOpen = false" class="text-gray-400 hover:text-gray-500">
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="space-y-4">
+                                        <!-- Info Pasien Preview -->
+                                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                                            <h4 class="text-sm font-semibold text-gray-700 mb-2">Informasi Pasien</h4>
+                                            <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
+                                                <div class="text-gray-500">Nama:</div><div class="font-medium text-gray-900" x-text="selectedVisit.id_pasien || '-'"></div>
+                                                <div class="text-gray-500">Umur:</div><div class="font-medium text-gray-900" x-text="selectedVisit.umur ? selectedVisit.umur + ' Tahun' : '-'"></div>
+                                                <div class="text-gray-500">Alamat:</div><div class="font-medium text-gray-900" x-text="selectedVisit.alamat || '-'"></div>
+                                                <div class="text-gray-500">Unit Asal:</div><div class="font-medium text-gray-900" x-text="selectedVisit.unit_asal"></div>
+                                                
+                                                <!-- Khusus Tampil Rujukan -->
+                                                <template x-if="selectedVisit.unit_asal === 'UGD/Gawat Darurat' && selectedVisit.rujukan?.status">
+                                                    <div class="col-span-2 grid grid-cols-2 gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
+                                                        <div class="text-amber-600 font-medium col-span-2">Data Rujukan:</div>
+                                                        <div class="text-gray-500">Tujuan RS:</div><div class="font-medium text-gray-900" x-text="selectedVisit.rujukan.alasan || '-'"></div>
+                                                        <div class="text-gray-500">Transportasi:</div><div class="font-medium text-gray-900" x-text="selectedVisit.rujukan.transportasi"></div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+
+                                        <!-- Rincian Biaya Preview -->
+                                        <div>
+                                            <h4 class="text-sm font-semibold text-gray-700 mb-2">Rincian Biaya</h4>
+                                            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                                                <table class="w-full text-sm text-left">
+                                                    <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
+                                                        <tr>
+                                                            <th class="px-3 py-2 text-center w-10">No</th>
+                                                            <th class="px-3 py-2">Tindakan</th>
+                                                            <th class="px-3 py-2 text-center">Qty</th>
+                                                            <th class="px-3 py-2 text-right">Subtotal</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody class="divide-y divide-gray-200">
+                                                        <template x-if="!selectedVisit.rincian_biaya || selectedVisit.rincian_biaya.length === 0">
+                                                            <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Tidak ada tindakan</td></tr>
+                                                        </template>
+                                                        <template x-for="(item, idx) in selectedVisit.rincian_biaya" :key="item.kode">
+                                                            <tr class="bg-white">
+                                                                <td class="px-3 py-2 text-center" x-text="idx + 1"></td>
+                                                                <td class="px-3 py-2" x-text="item.nama"></td>
+                                                                <td class="px-3 py-2 text-center" x-text="item.qty"></td>
+                                                                <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
+                                                            </tr>
+                                                        </template>
+                                                    </tbody>
+                                                    <tfoot class="bg-gray-50 font-bold border-t border-gray-200">
+                                                        <tr>
+                                                            <td colspan="3" class="px-3 py-3 text-right text-gray-700">TOTAL KESELURUHAN</td>
+                                                            <td class="px-3 py-3 text-right text-green-600 text-base" x-text="formatRp(selectedVisit.total_biaya)"></td>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Modal Buttons -->
+                                    <div class="mt-6 flex flex-col sm:flex-row-reverse sm:space-x-2 sm:space-x-reverse gap-2 sm:gap-0">
+                                        <template x-if="selectedVisit.status_pemeriksaan !== 'Sudah Diperiksa'">
+                                            <button type="button" @click="tandaiSudahDiperiksa(selectedVisit.id)" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:w-auto sm:text-sm">
+                                                <svg class="mr-1.5 mt-0.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                                Sudah Diperiksa
+                                            </button>
+                                        </template>
+                                        <button type="button" @click="isVisitPreviewModalOpen = false" class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 sm:w-auto sm:text-sm">
+                                            Tutup Preview
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
                     </div>
                 </div>
