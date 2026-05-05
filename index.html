@@ -8,7 +8,7 @@
     <!-- Mencegah error favicon 404 -->
     <link rel="icon" href="data:,">
     
-    <!-- Tailwind CSS (via CDN) -->
+    <!-- Tailwind CSS (via CDN) - Sangat ringan untuk development -->
     <script src="https://cdn.tailwindcss.com"></script>
 
     <!-- Penangkap Error Darurat -->
@@ -31,12 +31,14 @@
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     </style>
 
-    <!-- Modul Logika Aplikasi (Dijalankan secara berurutan sebelum Alpine) -->
+    <!-- Modul Logika Aplikasi -->
     <script type="module">
         import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/module.esm.js';
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, updateDoc, initializeFirestore, persistentLocalCache } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Tambahan memoryLocalCache di-import untuk kebutuhan development
+        import { collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, updateDoc, initializeFirestore, persistentLocalCache, memoryLocalCache } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Konfigurasi Kustom Firebase
         const firebaseConfig = {
@@ -51,9 +53,13 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         
-        // Aktifkan mode Offline menggunakan standar baru Firebase v11
+        // Cek apakah sedang dalam mode Development (localhost/127.0.0.1)
+        const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname === '';
+
+        // Gunakan memoryLocalCache saat development agar data tidak nyangkut/stale.
+        // Gunakan persistentLocalCache saat production untuk fitur offline.
         const db = initializeFirestore(app, {
-            localCache: persistentLocalCache()
+            localCache: isDevelopment ? memoryLocalCache() : persistentLocalCache()
         });
 
         const appId = 'puskesmas-layanan';
@@ -68,11 +74,11 @@
             tarifs: [],
             visits: [],
             kategoriList: ['Semua'],
+            unsubscribeTarif: null,
+            unsubscribeVisit: null,
 
-            // State untuk Login / Register
-            email: '',
+            // State untuk Login
             password: '',
-            isLoginMode: true,
 
             // State untuk Manajemen Tarif
             isTarifModalOpen: false,
@@ -131,7 +137,7 @@
                 const loadingTimeout = setTimeout(() => {
                     if (this.isLoading) {
                         this.isLoading = false;
-                        this.showNotification("Gagal memuat sistem: Koneksi terblokir atau cache bermasalah. Harap tekan Ctrl + F5.", "error");
+                        this.showNotification("Gagal memuat sistem: Koneksi terblokir atau lambat. Harap tekan Ctrl + F5.", "error");
                     }
                 }, 8000); // Batas tunggu 8 detik
 
@@ -142,6 +148,9 @@
                     if (user) {
                         this.listenToFirestore();
                     } else {
+                        // Hentikan langganan data saat logout agar tidak terjadi error permission
+                        if (this.unsubscribeTarif) this.unsubscribeTarif();
+                        if (this.unsubscribeVisit) this.unsubscribeVisit();
                         this.tarifs = [];
                         this.visits = [];
                     }
@@ -151,17 +160,12 @@
             async handleLogin() {
                 this.isLoading = true;
                 try {
-                    if (this.isLoginMode) {
-                        await signInWithEmailAndPassword(auth, this.email, this.password);
-                        this.showNotification("Login berhasil!", "success");
-                    } else {
-                        await createUserWithEmailAndPassword(auth, this.email, this.password);
-                        this.showNotification("Akun berhasil dibuat dan otomatis masuk!", "success");
-                    }
-                    this.email = '';
+                    // Login langsung menggunakan email yang sudah ditentukan (hardcoded)
+                    await signInWithEmailAndPassword(auth, 'arifuddinanshory11@gmail.com', this.password);
+                    this.showNotification("Login berhasil!", "success");
                     this.password = '';
                 } catch (error) {
-                    this.showNotification(error.message, "error");
+                    this.showNotification("Password salah atau gagal masuk.", "error");
                     this.isLoading = false;
                 }
             },
@@ -176,7 +180,12 @@
             },
 
             listenToFirestore() {
-                onSnapshot(
+                // Hentikan listener lama jika ada untuk mencegah duplikasi data
+                if (this.unsubscribeTarif) this.unsubscribeTarif();
+                if (this.unsubscribeVisit) this.unsubscribeVisit();
+
+                // Listener untuk Tarif Layanan
+                this.unsubscribeTarif = onSnapshot(
                     collection(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan'), 
                     (snap) => {
                         const t = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.kode.localeCompare(b.kode));
@@ -189,7 +198,8 @@
                     }
                 );
 
-                onSnapshot(
+                // Listener untuk Data Kunjungan
+                this.unsubscribeVisit = onSnapshot(
                     collection(db, 'artifacts', appId, 'public', 'data', 'kunjungan'), 
                     (snap) => {
                         this.visits = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => {
@@ -215,6 +225,7 @@
                         }
                     }
                 } else {
+                    // Hapus item ambulans otomatis jika kondisi rujukan berubah
                     this.formData.rincian_biaya = this.formData.rincian_biaya.filter(item => !item.isAutoAddedAmbulance);
                 }
             },
@@ -592,7 +603,7 @@
 
     <div x-cloak x-show="!isLoading">
         
-        <!-- HALAMAN LOGIN / REGISTER -->
+        <!-- HALAMAN LOGIN -->
         <div x-show="!user" class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 bg-gray-100">
             <div class="max-w-md w-full space-y-8 bg-white p-8 rounded-xl shadow-md border border-gray-200">
                 <div class="text-center flex flex-col items-center">
@@ -600,29 +611,19 @@
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
                     </div>
                     <h2 class="text-3xl font-bold text-gray-900">Sistem Puskesmas</h2>
-                    <h3 class="mt-2 text-lg text-gray-600" x-text="isLoginMode ? 'Login Petugas' : 'Daftar Akun Baru'"></h3>
                 </div>
-                <form class="mt-8 space-y-6" @submit.prevent="handleLogin()">
-                    <div class="rounded-md shadow-sm -space-y-px">
-                        <div>
-                            <label for="email-address" class="sr-only">Email address</label>
-                            <input id="email-address" type="email" x-model="email" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm" placeholder="Email">
-                        </div>
-                        <div>
-                            <label for="password" class="sr-only">Password</label>
-                            <input id="password" type="password" x-model="password" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm" placeholder="Password">
-                        </div>
+                <form class="mt-6 space-y-6" @submit.prevent="handleLogin()">
+                    <div>
+                        <label for="password" class="sr-only">Password</label>
+                        <input id="password" type="password" x-model="password" required class="appearance-none relative block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm" placeholder="Masukkan Password Anda">
                     </div>
 
                     <div>
-                        <button type="submit" class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                            <span x-text="isLoginMode ? 'Masuk' : 'Daftar Akun'"></span>
+                        <button type="submit" class="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 shadow-sm transition-colors">
+                            Masuk
                         </button>
                     </div>
                 </form>
-                <div class="text-sm text-center">
-                    <button @click="isLoginMode = !isLoginMode; email=''; password=''" class="font-medium text-green-600 hover:text-green-500" x-text="isLoginMode ? 'Belum punya akun? Daftar di sini' : 'Sudah punya akun? Masuk di sini'"></button>
-                </div>
             </div>
         </div>
 
