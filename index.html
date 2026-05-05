@@ -96,8 +96,8 @@
                 pembayaran: { jumlah_dibayar: '' }
             },
 
-            tindakanInput: { kategoriFilter: 'Semua' },
-            searchTarif: '', // State pencarian live
+            searchTindakan: '', // Input pencarian untuk dropdown
+            showDropdownTindakan: false, // Kontrol visibilitas dropdown kustom
 
             get totalBiaya() {
                 return this.formData.rincian_biaya.reduce((sum, item) => sum + item.subtotal, 0);
@@ -108,21 +108,19 @@
                 return bayar - this.totalBiaya;
             },
 
-            get filteredTarifs() {
+            get filteredDropdownTarifs() {
                 let active = this.tarifs.filter(t => t.aktif !== false);
-                
-                // Filter Kategori
-                if (this.tindakanInput.kategoriFilter !== 'Semua') {
-                    active = active.filter(t => t.kategori === this.tindakanInput.kategoriFilter);
-                }
-                
-                // Pencarian Live (Nama / Kode)
-                if (this.searchTarif.trim() !== '') {
-                    const q = this.searchTarif.toLowerCase();
+                if (this.searchTindakan.trim() !== '') {
+                    const q = this.searchTindakan.toLowerCase();
                     active = active.filter(t => t.nama.toLowerCase().includes(q) || t.kode.toLowerCase().includes(q));
                 }
-                
                 return active;
+            },
+
+            tambahDanTutupDropdown(tarifObj) {
+                this.tambahKeRincian(tarifObj, 1);
+                this.searchTindakan = ''; // Kosongkan kolom pencarian
+                this.showDropdownTindakan = false; // Tutup dropdown
             },
 
             init() {
@@ -312,7 +310,8 @@
                     rujukan: { status: false, alasan: '', transportasi: 'Kendaraan Sendiri / Keluarga' },
                     rincian_biaya: [], status_pembayaran: 'belum', pembayaran: { jumlah_dibayar: '' }
                 };
-                this.searchTarif = '';
+                this.searchTindakan = '';
+                this.showDropdownTindakan = false;
                 this.activeTab = 'kunjungan';
             },
 
@@ -825,41 +824,39 @@
                                 Tambahkan Tindakan / Layanan
                             </h2>
                             
-                            <div class="flex flex-col md:flex-row gap-3 mb-4">
-                                <div class="relative flex-grow">
+                            <div class="relative mb-2" @click.outside="showDropdownTindakan = false">
+                                <div class="relative w-full">
                                     <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                         <svg class="h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                                     </div>
-                                    <input type="text" x-model="searchTarif" placeholder="Ketik nama atau kode tindakan..." class="w-full pl-10 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 focus:bg-white transition-colors">
+                                    <input type="text" 
+                                        x-model="searchTindakan" 
+                                        @focus="showDropdownTindakan = true"
+                                        placeholder="Ketik nama atau kode tindakan untuk mencari..." 
+                                        class="w-full pl-10 px-3 py-3 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 focus:bg-white transition-colors">
                                 </div>
-                                <div class="md:w-1/3">
-                                    <select x-model="tindakanInput.kategoriFilter" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
-                                        <template x-for="kat in kategoriList" :key="kat">
-                                            <option :value="kat" x-text="kat"></option>
-                                        </template>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <!-- Daftar Master Tarif Scrollable -->
-                            <div class="h-[300px] overflow-y-auto custom-scrollbar border border-gray-200 rounded-md divide-y divide-gray-100 bg-white">
-                                <template x-if="filteredTarifs.length === 0">
-                                    <div class="p-6 text-center text-gray-500 text-sm">
-                                        Tindakan tidak ditemukan.
-                                    </div>
-                                </template>
-                                <template x-for="t in filteredTarifs" :key="t.kode">
-                                    <div class="flex justify-between items-center p-3 hover:bg-green-50 transition-colors group">
-                                        <div class="pr-2">
-                                            <div class="text-sm font-medium text-gray-800" x-text="t.nama"></div>
-                                            <div class="text-xs text-gray-500" x-text="t.kode + ' • ' + formatRp(t.harga)"></div>
+                                
+                                <!-- Dropdown List (Melayang) -->
+                                <div x-show="showDropdownTindakan" 
+                                     x-transition
+                                     class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto custom-scrollbar"
+                                     style="display: none;">
+                                    
+                                    <template x-if="filteredDropdownTarifs.length === 0">
+                                        <div class="px-4 py-3 text-sm text-gray-500 text-center">Tindakan tidak ditemukan.</div>
+                                    </template>
+                                    
+                                    <template x-for="t in filteredDropdownTarifs" :key="t.kode">
+                                        <div @click="tambahDanTutupDropdown(t)" 
+                                             class="px-4 py-2 cursor-pointer hover:bg-green-50 border-b border-gray-50 last:border-0 transition-colors">
+                                            <div class="flex justify-between items-center">
+                                                <div class="text-sm font-medium text-gray-800" x-text="t.nama"></div>
+                                                <div class="text-xs font-semibold text-green-600" x-text="formatRp(t.harga)"></div>
+                                            </div>
+                                            <div class="text-xs text-gray-500 font-mono mt-0.5" x-text="t.kode"></div>
                                         </div>
-                                        <button @click="tambahKeRincian(t, 1)" class="shrink-0 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-600 hover:text-white hover:border-blue-600 text-xs font-semibold transition-colors flex items-center">
-                                            <svg class="mr-1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                            Tambah
-                                        </button>
-                                    </div>
-                                </template>
+                                    </template>
+                                </div>
                             </div>
                         </div>
 
