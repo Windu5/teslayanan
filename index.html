@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistem Pencatatan Biaya Puskesmas</title>
     
-    <!-- Mencegah error favicon 404 -->
-    <link rel="icon" href="data:,">
+    <!-- Ikon Tab Browser (Favicon) Bulat Hijau dengan Detak Jantung -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12' fill='%2322c55e'/%3E%3Cpath d='M5 12h3l2-5 3 10 2-5h4' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     
     <!-- Tailwind CSS (via CDN) - Sangat ringan untuk development -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -790,9 +790,10 @@
                 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div class="flex justify-between items-center py-4">
                         <div class="flex items-center space-x-3">
-                            <div class="bg-green-500 p-2 rounded-lg text-white">
+                            <!-- Mengubah ikon header agar berbentuk bulat sempurna mengikuti gambar referensi -->
+                            <div class="bg-green-500 p-2.5 rounded-full text-white">
                                 <!-- Icon Activity -->
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-6 4 12 3-6h4"></path></svg>
                             </div>
                             <div>
                                 <h1 class="text-xl font-bold text-gray-900 leading-tight">Sistem Billing Puskesmas</h1>
@@ -1680,6 +1681,9 @@
                     </p>
                     <div class="border-t border-gray-100 pt-6">
                         <p class="text-xs text-gray-400">&copy; 2026 Sistem Informasi Puskesmas. All rights reserved.</p>
+<p class="text-xs mt-1 font-bold text-green-400 tracking-wider">
+    Win x Naraku
+</p>
                     </div>
                 </div>
                 
