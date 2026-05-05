@@ -761,7 +761,8 @@
                 <div x-show="activeTab === 'tambah'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     
                     <!-- Kolom Kiri: Identitas Pasien & Daftar Tarif -->
-                    <div class="lg:col-span-2 space-y-6">
+                    <!-- Tambahkan min-w-0 di sini agar Grid tidak meluber mengikuti lebar tabel -->
+                    <div class="lg:col-span-2 space-y-6 min-w-0">
                         
                         <!-- Panel Identitas Pasien -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -861,12 +862,13 @@
                         </div>
 
                         <!-- Panel Tabel Rincian -->
-                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full">
                             <div class="p-4 border-b border-gray-200 bg-gray-50">
                                 <h3 class="font-medium text-gray-800">Keranjang Rincian Biaya</h3>
                             </div>
-                            <div class="overflow-x-auto">
-                                <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
+                            <div class="overflow-x-auto w-full custom-scrollbar pb-2">
+                                <!-- Lebar minimum dinaikkan jadi 600px agar tabel tidak memaksakan diri mengecil di HP -->
+                                <table class="w-full text-sm text-left text-gray-600 min-w-[600px]">
                                     <thead class="text-xs text-gray-500 uppercase bg-gray-100">
                                         <tr>
                                             <th class="px-4 py-2">Nama Tindakan/Layanan</th>
