@@ -34,6 +34,11 @@
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* CSS Counter untuk penomoran urut otomatis di tabel rincian */
+        .counter-reset-table { counter-reset: row-num; }
+        .counter-row { counter-increment: row-num; }
+        .counter-cell::before { content: counter(row-num) "."; }
     </style>
 
     <!-- Modul Logika Aplikasi -->
@@ -91,6 +96,7 @@
             password: '',
 
             // State untuk Manajemen Tarif & Modal Preview
+            searchTarifQuery: '', // State baru untuk fitur pencarian tarif
             isTarifModalOpen: false,
             isPreviewModalOpen: false, // Menambahkan state untuk modal preview
             isVisitPreviewModalOpen: false, // State modal preview daftar kunjungan
@@ -137,6 +143,19 @@
                 if (cat.includes('umum') || cat.includes('tindakan medik') || cat.includes('bedah minor')) return 'B';
                 if (cat.includes('ugd') || cat.includes('ranap') || cat.includes('pelayanan') || cat.includes('karcis') || cat.includes('pendaftaran') || cat.includes('konsultasi')) return 'A';
                 return 'B'; // Fallback otomatis ke Tindakan Medik Umum jika kategori tidak dikenali
+            },
+
+            // Getter untuk data tarif yang sudah difilter oleh fitur pencarian
+            get filteredTarifs() {
+                if (this.searchTarifQuery.trim() === '') {
+                    return this.tarifs;
+                }
+                const query = this.searchTarifQuery.toLowerCase();
+                return this.tarifs.filter(t => 
+                    (t.kode && t.kode.toLowerCase().includes(query)) ||
+                    (t.nama && t.nama.toLowerCase().includes(query)) ||
+                    (t.kategori && t.kategori.toLowerCase().includes(query))
+                );
             },
 
             get groupedTarifs() {
@@ -483,15 +502,17 @@
                                 <td colspan="4" style="padding: 10px 0 4px 0; font-weight: bold; font-size: 13px; color: #333;">${group.name}</td>
                             </tr>
                         `;
+                        let groupItemIndex = 1;
                         itemsInGroup.forEach((item) => {
                             rincianHtml += `
                                 <tr>
-                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">-</td>
+                                    <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${groupItemIndex}.</td>
                                     <td style="padding: 4px 0; border-bottom: 1px dashed #ccc;">${item.nama}</td>
                                     <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: center;">${item.qty}</td>
                                     <td style="padding: 4px 0; border-bottom: 1px dashed #ccc; text-align: right;">${this.formatRp(item.subtotal)}</td>
                                 </tr>
                             `;
+                            groupItemIndex++;
                         });
                     }
                 });
@@ -1060,7 +1081,7 @@
                                                 <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
                                                     <thead class="text-[11px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                                                         <tr>
-                                                            <th class="px-3 py-2 w-8 text-center"></th>
+                                                            <th class="px-3 py-2 w-8 text-center">No</th>
                                                             <th class="px-3 py-2">Nama Tindakan / Layanan</th>
                                                             <th class="px-3 py-2 text-right">Harga</th>
                                                             <th class="px-3 py-2 text-center w-24">Qty</th>
@@ -1068,7 +1089,7 @@
                                                             <th class="px-3 py-2 text-center w-10"></th>
                                                         </tr>
                                                     </thead>
-                                                    <tbody>
+                                                    <tbody class="counter-reset-table">
                                                         <!-- Pesan jika kosong -->
                                                         <template x-if="!formData.rincian_biaya.some(r => r.groupId === group.id)">
                                                             <tr><td colspan="6" class="px-3 py-4 text-center text-gray-400 italic text-xs">Belum ada tindakan yang dipilih untuk kategori ini.</td></tr>
@@ -1077,8 +1098,8 @@
                                                         <!-- Loop rincian biaya yang difilter khusus grup ini -->
                                                         <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
                                                             <template x-if="item.groupId === group.id">
-                                                                <tr class="border-b last:border-0 hover:bg-gray-50 bg-white">
-                                                                    <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                                <tr class="border-b last:border-0 hover:bg-gray-50 bg-white counter-row">
+                                                                    <td class="px-3 py-2 text-center text-gray-500 font-medium text-xs counter-cell"></td>
                                                                     <td class="px-3 py-2">
                                                                         <div class="font-medium text-gray-800 text-xs" x-text="item.nama"></div>
                                                                         <div class="text-[10px] text-gray-400 font-mono mt-0.5" x-text="item.kode"></div>
@@ -1190,23 +1211,34 @@
 
                 <!-- TAB: MASTER TARIF -->
                 <div x-show="activeTab === 'tarif'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div class="p-4 sm:p-6 border-b border-gray-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-                        <div>
-                            <h2 class="text-lg font-semibold text-gray-800">Data Master Tarif Layanan</h2>
-                            <p class="text-sm text-gray-500">Kelola tarif Puskesmas sesuai Perda/Ketentuan.</p>
+                    <div class="p-4 sm:p-6 border-b border-gray-200 flex flex-col gap-4">
+                        <!-- Bagian Judul dan Tombol Aksi -->
+                        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                            <div>
+                                <h2 class="text-lg font-semibold text-gray-800">Data Master Tarif Layanan</h2>
+                                <p class="text-sm text-gray-500">Kelola tarif Puskesmas sesuai Perda/Ketentuan.</p>
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <button @click="exportTarif()" class="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
+                                    Export JSON
+                                </button>
+                                <label class="bg-white hover:bg-gray-50 text-blue-600 text-sm font-medium py-2 px-3 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer">
+                                    Import JSON
+                                    <input type="file" accept=".json" class="hidden" @change="handleImportTarif">
+                                </label>
+                                <button @click="openModalTarif(false)" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-sm transition-colors flex items-center">
+                                    <svg class="mr-1" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                    Tambah Tarif
+                                </button>
+                            </div>
                         </div>
-                        <div class="flex flex-wrap gap-2">
-                            <button @click="exportTarif()" class="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
-                                Export JSON
-                            </button>
-                            <label class="bg-white hover:bg-gray-50 text-blue-600 text-sm font-medium py-2 px-3 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer">
-                                Import JSON
-                                <input type="file" accept=".json" class="hidden" @change="handleImportTarif">
-                            </label>
-                            <button @click="openModalTarif(false)" class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-sm transition-colors flex items-center">
-                                <svg class="mr-1" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                Tambah Tarif
-                            </button>
+
+                        <!-- Kolom Pencarian Master Tarif -->
+                        <div class="relative w-full sm:max-w-md">
+                            <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                                <svg class="w-4 h-4 text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/></svg>
+                            </div>
+                            <input type="text" x-model="searchTarifQuery" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full pl-10 p-2.5 shadow-sm transition-colors" placeholder="Cari berdasarkan kode, nama layanan, atau kategori...">
                         </div>
                     </div>
 
@@ -1223,6 +1255,7 @@
                                 </tr>
                             </thead>
                             <tbody>
+                                <!-- Tampilan saat database murni kosong -->
                                 <template x-if="tarifs.length === 0">
                                     <tr>
                                         <td colspan="6" class="px-6 py-12 text-center">
@@ -1234,7 +1267,20 @@
                                         </td>
                                     </tr>
                                 </template>
-                                <template x-for="t in tarifs" :key="t.kode">
+
+                                <!-- Tampilan saat hasil pencarian tidak ditemukan -->
+                                <template x-if="tarifs.length > 0 && filteredTarifs.length === 0">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-12 text-center">
+                                            <div class="flex flex-col items-center justify-center text-gray-500">
+                                                <p>Pencarian untuk "<span class="font-bold text-gray-700" x-text="searchTarifQuery"></span>" tidak ditemukan.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </template>
+
+                                <!-- Looping Data Master Tarif (Menggunakan data yang sudah difilter) -->
+                                <template x-for="t in filteredTarifs" :key="t.kode">
                                     <tr class="bg-white border-b hover:bg-gray-50" :class="!t.aktif ? 'opacity-60' : ''">
                                         <td class="px-6 py-3 font-mono font-medium text-gray-900" x-text="t.kode"></td>
                                         <td class="px-6 py-3">
@@ -1484,7 +1530,7 @@
                                             <table class="w-full text-sm text-left">
                                                 <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                     <tr>
-                                                        <th class="px-3 py-2 text-center w-10"></th>
+                                                        <th class="px-3 py-2 text-center w-10">No</th>
                                                         <th class="px-3 py-2">Tindakan</th>
                                                         <th class="px-3 py-2 text-center">Qty</th>
                                                         <th class="px-3 py-2 text-right">Subtotal</th>
@@ -1499,13 +1545,13 @@
                                                 
                                                 <!-- Pengelompokan Kategori Biaya Sesuai Urutan -->
                                                 <template x-for="group in layananGroups" :key="group.id">
-                                                    <tbody x-show="formData.rincian_biaya.some(r => r.groupId === group.id)">
+                                                    <tbody x-show="formData.rincian_biaya.some(r => r.groupId === group.id)" class="counter-reset-table">
                                                         <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
                                                             <td colspan="4" class="px-3 py-2 text-xs font-bold" :class="group.textClass" x-text="group.name"></td>
                                                         </tr>
                                                         <template x-for="(item, idx) in formData.rincian_biaya" :key="item.kode + '_' + idx">
-                                                            <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
-                                                                <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                            <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0 counter-row">
+                                                                <td class="px-3 py-2 text-center text-gray-500 font-medium text-xs counter-cell"></td>
                                                                 <td class="px-3 py-2" x-text="item.nama"></td>
                                                                 <td class="px-3 py-2 text-center" x-text="item.qty"></td>
                                                                 <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
@@ -1610,7 +1656,7 @@
                                                 <table class="w-full text-sm text-left">
                                                     <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                         <tr>
-                                                            <th class="px-3 py-2 text-center w-10"></th>
+                                                            <th class="px-3 py-2 text-center w-10">No</th>
                                                             <th class="px-3 py-2">Tindakan</th>
                                                             <th class="px-3 py-2 text-center">Qty</th>
                                                             <th class="px-3 py-2 text-right">Subtotal</th>
@@ -1625,13 +1671,13 @@
                                                     
                                                     <!-- Pengelompokan Kategori Biaya Sesuai Urutan di Daftar Riwayat -->
                                                     <template x-for="group in layananGroups" :key="group.id">
-                                                        <tbody x-show="selectedVisit.rincian_biaya?.some(r => r.groupId === group.id)">
+                                                        <tbody x-show="selectedVisit.rincian_biaya?.some(r => r.groupId === group.id)" class="counter-reset-table">
                                                             <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
                                                                 <td colspan="4" class="px-3 py-2 text-xs font-bold" :class="group.textClass" x-text="group.name"></td>
                                                             </tr>
                                                             <template x-for="(item, idx) in selectedVisit.rincian_biaya" :key="item.kode + '_' + idx">
-                                                                <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0">
-                                                                    <td class="px-3 py-2 text-center text-gray-400 font-bold">•</td>
+                                                                <tr x-show="item.groupId === group.id" class="bg-white border-b border-gray-100 last:border-0 counter-row">
+                                                                    <td class="px-3 py-2 text-center text-gray-500 font-medium text-xs counter-cell"></td>
                                                                     <td class="px-3 py-2" x-text="item.nama"></td>
                                                                     <td class="px-3 py-2 text-center" x-text="item.qty"></td>
                                                                     <td class="px-3 py-2 text-right font-medium" x-text="formatRp(item.subtotal)"></td>
