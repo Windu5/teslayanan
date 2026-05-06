@@ -101,6 +101,11 @@
             isPreviewModalOpen: false, // Menambahkan state untuk modal preview
             isVisitPreviewModalOpen: false, // State modal preview daftar kunjungan
             
+            // State untuk Modal Rekapitulasi
+            isRekapModalOpen: false,
+            rekapBulan: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0'),
+            rekapUnitFilter: 'Semua', // State baru untuk filter unit di tabel rekap
+            
             // State untuk Manajemen Petugas
             isOfficerModalOpen: false,
             isOfficerEditMode: false,
@@ -113,6 +118,7 @@
             formTarif: { kode: '', nama: '', kategori: '', harga: 0, aktif: true },
 
             formData: {
+                tanggal: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0'),
                 id_pasien: '',
                 umur: '',
                 alamat: '',
@@ -175,6 +181,58 @@
             // Ambil khusus data tarif dengan kode berawalan "AMB-" untuk dropdown rujukan
             get ambulanceTarifs() {
                 return this.tarifs.filter(t => t.kode.startsWith('AMB-') && t.aktif !== false);
+            },
+
+            // Logika untuk Rekapitulasi Data Bulanan
+            get dataRekap() {
+                const groups = {};
+                if (!this.rekapBulan) return [];
+
+                const [rekapYear, rekapMonth] = this.rekapBulan.split('-');
+
+                this.visits.forEach(v => {
+                    let match = false;
+                    // Mencari kecocokan berdasarkan format 'YYYY-MM' dari tanggal_raw, atau mundur ke tanggal biasa jika data lama
+                    if (v.tanggal_raw) {
+                        if (v.tanggal_raw.startsWith(this.rekapBulan)) match = true;
+                    } else if (v.tanggal) {
+                        const parts = v.tanggal.split('/');
+                        if (parts.length === 3) {
+                            const m = parts[1].padStart(2, '0');
+                            const y = parts[2];
+                            if (y === rekapYear && m === rekapMonth) match = true;
+                        }
+                    }
+
+                    if (match) {
+                        const unit = v.unit_asal || 'Tidak Diketahui';
+                        
+                        // Melewati (skip) data jika filter tidak sesuai dengan unit saat ini
+                        if (this.rekapUnitFilter !== 'Semua' && unit !== this.rekapUnitFilter) {
+                            return; 
+                        }
+
+                        if (!groups[unit]) groups[unit] = { jumlah: 0, total: 0 };
+                        groups[unit].jumlah += 1;
+                        groups[unit].total += (v.total_biaya || 0);
+                    }
+                });
+
+                // Ubah objek menjadi array agar mudah di-looping di tabel
+                return Object.keys(groups).map(key => ({
+                    unit: key,
+                    jumlah: groups[key].jumlah,
+                    total: groups[key].total
+                })).sort((a, b) => b.jumlah - a.jumlah); // Urutkan dari jumlah kunjungan terbanyak
+            },
+
+            // Hitung Grand Total untuk tabel rekapitulasi
+            get totalRekap() {
+                return this.dataRekap.reduce((acc, curr) => {
+                    acc.jumlah += curr.jumlah;
+                    acc.total += curr.total;
+                    return acc;
+                }, { jumlah: 0, total: 0 });
             },
 
             get totalBiaya() {
@@ -351,11 +409,16 @@
                     return this.showNotification("Tambahkan minimal 1 tindakan/layanan", "error");
                 }
 
+                // Format tanggal dari input browser (YYYY-MM-DD) menjadi format Indonesia (DD/MM/YYYY)
+                const [y, m, d] = this.formData.tanggal.split('-');
+                const formattedDate = `${parseInt(d)}/${parseInt(m)}/${y}`;
+
                 const payload = {
                     id_pasien: this.formData.id_pasien,
                     umur: this.formData.umur,
                     alamat: this.formData.alamat,
-                    tanggal: new Date().toLocaleDateString('id-ID'),
+                    tanggal: formattedDate,
+                    tanggal_raw: this.formData.tanggal, // Menyimpan format mentah (YYYY-MM-DD) untuk kemudahan sorting data di masa depan
                     timestamp: serverTimestamp(),
                     unit_asal: this.formData.unit_asal,
                     catatan: this.formData.catatan,
@@ -386,6 +449,7 @@
 
             resetForm() {
                 this.formData = {
+                    tanggal: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0'),
                     id_pasien: '', umur: '', alamat: '', unit_asal: 'UGD/Gawat Darurat',
                     rujukan: { status: false, id_tarif_ambulan: '' },
                     catatan: '',
@@ -751,6 +815,13 @@
 
             formatRp(angka) {
                 return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+            },
+
+            formatTanggalID(dateStr) {
+                if (!dateStr) return '-';
+                const parts = dateStr.split('-');
+                if(parts.length !== 3) return dateStr;
+                return `${parseInt(parts[2])}/${parseInt(parts[1])}/${parts[0]}`;
             }
         }));
 
@@ -866,19 +937,23 @@
             </header>
 
             <!-- Main Content Area -->
-            <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+            <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-2">
                 
                 <!-- TAB: DAFTAR KUNJUNGAN -->
                 <div x-show="activeTab === 'kunjungan'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="p-6 border-b border-gray-200 flex justify-between items-center">
                         <h2 class="text-lg font-semibold text-gray-800">Riwayat Kunjungan Pasien</h2>
-                        <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full" x-text="'Total: ' + visits.length + ' Kunjungan'"></span>
+                        <button @click="isRekapModalOpen = true" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium py-1.5 px-3 rounded-lg border border-indigo-200 transition-colors shadow-sm flex items-center focus:outline-none">
+                            <svg class="mr-1.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
+                            Rekap Bulanan
+                        </button>
                     </div>
                     
                     <div class="overflow-x-auto">
                         <table class="w-full text-sm text-left text-gray-500">
                             <thead class="text-xs text-gray-700 uppercase bg-gray-50">
                                 <tr>
+                                    <th class="px-4 py-4 text-center w-12">No</th>
                                     <th class="px-6 py-4">Tanggal & Waktu</th>
                                     <th class="px-6 py-4 min-w-[170px]">Nama Pasien</th>
                                     <th class="px-6 py-4">Unit Asal</th>
@@ -890,11 +965,15 @@
                             <tbody>
                                 <template x-if="visits.length === 0">
                                     <tr>
-                                        <td colspan="6" class="px-6 py-8 text-center text-gray-500 italic">Belum ada data kunjungan.</td>
+                                        <td colspan="7" class="px-6 py-8 text-center text-gray-500 italic">Belum ada data kunjungan.</td>
                                     </tr>
                                 </template>
-                                <template x-for="v in visits" :key="v.id">
+                                <!-- Tambahkan (v, index) untuk mengambil index loop saat ini -->
+                                <template x-for="(v, index) in visits" :key="v.id">
                                     <tr class="bg-white border-b hover:bg-gray-50">
+                                        <!-- Rumus kebalikan: (Total Visits - Current Index) -->
+                                        <td class="px-4 py-4 text-center font-medium text-gray-500" x-text="visits.length - index"></td>
+                                        
                                         <td class="px-6 py-4 whitespace-nowrap">
                                             <span x-text="v.tanggal"></span> <br/>
                                             <span class="text-xs text-gray-400" x-text="v.timestamp ? v.timestamp.toDate().toLocaleTimeString('id-ID') : '-'"></span>
@@ -957,6 +1036,10 @@
                             <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">Informasi Pasien</h2>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Tanggal Kunjungan *</label>
+                                    <input type="date" x-model="formData.tanggal" required class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-700">
+                                </div>
+                                <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">Nama Pasien *</label>
                                     <input type="text" x-model="formData.id_pasien" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: Siti Aminah" required>
                                 </div>
@@ -964,17 +1047,17 @@
                                     <label class="block text-sm font-medium text-gray-700 mb-1">Umur (Tahun)</label>
                                     <input type="number" min="0" x-model="formData.umur" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: 35">
                                 </div>
-                                <div class="md:col-span-2">
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap</label>
-                                    <input type="text" x-model="formData.alamat" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: Dusun Sukamaju, Desa Mekarsari">
-                                </div>
-                                <div class="md:col-span-2">
+                                <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">Unit Asal Pelayanan</label>
                                     <select x-model="formData.unit_asal" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500">
                                         <option value="UGD/Gawat Darurat">UGD / Gawat Darurat</option>
                                         <option value="Rawat Inap">Rawat Inap</option>
                                         <option value="Kamar Bersalin">Kamar Bersalin</option>
                                     </select>
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Alamat Lengkap</label>
+                                    <input type="text" x-model="formData.alamat" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Contoh: Dusun Sukamaju, Desa Mekarsari">
                                 </div>
                             </div>
                         </div>
@@ -1070,61 +1153,53 @@
                                         </div>
                                     </div>
 
-                                    <!-- Padding disusutkan dari p-4 menjadi p-3 agar lebih padat di HP -->
-                                    <div class="p-3">
-                                        <!-- Tabel Rincian Biaya Khusus Group Ini -->
-                                        <div class="border rounded-md overflow-hidden" :class="group.borderClass">
-                                            <div class="px-3 py-2 border-b" :class="group.bgClass + ' ' + group.borderClass">
-                                                <span class="text-[11px] font-bold uppercase tracking-wider" :class="group.textClass">Rincian Biaya</span>
-                                            </div>
-                                            <div class="overflow-x-auto custom-scrollbar">
-                                                <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
-                                                    <thead class="text-[11px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
-                                                        <tr>
-                                                            <th class="px-3 py-2 w-8 text-center">No</th>
-                                                            <th class="px-3 py-2">Nama Tindakan / Layanan</th>
-                                                            <th class="px-3 py-2 text-right">Harga</th>
-                                                            <th class="px-3 py-2 text-center w-24">Qty</th>
-                                                            <th class="px-3 py-2 text-right">Subtotal</th>
-                                                            <th class="px-3 py-2 text-center w-10"></th>
+                                    <!-- Tabel Rincian Langsung (Menghilangkan Nested Card "Rincian Biaya") -->
+                                    <div class="overflow-x-auto custom-scrollbar bg-white">
+                                        <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
+                                            <thead class="text-[11px] text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+                                                <tr>
+                                                    <th class="px-4 py-2.5 w-8 text-center">No</th>
+                                                    <th class="px-4 py-2.5">Nama Tindakan / Layanan</th>
+                                                    <th class="px-4 py-2.5 text-right">Harga</th>
+                                                    <th class="px-4 py-2.5 text-center w-24">Qty</th>
+                                                    <th class="px-4 py-2.5 text-right">Subtotal</th>
+                                                    <th class="px-4 py-2.5 text-center w-10"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="counter-reset-table">
+                                                <!-- Pesan jika kosong -->
+                                                <template x-if="!formData.rincian_biaya.some(r => r.groupId === group.id)">
+                                                    <tr><td colspan="6" class="px-4 py-5 text-center text-gray-400 italic text-xs">Belum ada tindakan. Klik tombol <span class="font-bold">+</span> di atas untuk menambahkan.</td></tr>
+                                                </template>
+                                                
+                                                <!-- Loop rincian biaya yang difilter khusus grup ini -->
+                                                <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
+                                                    <template x-if="item.groupId === group.id">
+                                                        <tr class="border-b last:border-0 hover:bg-gray-50 bg-white counter-row">
+                                                            <td class="px-4 py-2.5 text-center text-gray-500 font-medium text-xs counter-cell"></td>
+                                                            <td class="px-4 py-2.5">
+                                                                <div class="font-medium text-gray-800 text-xs" x-text="item.nama"></div>
+                                                                <div class="text-[10px] text-gray-400 font-mono mt-0.5" x-text="item.kode"></div>
+                                                            </td>
+                                                            <td class="px-4 py-2.5 text-right text-xs" x-text="formatRp(item.harga_satuan)"></td>
+                                                            <td class="px-4 py-2.5">
+                                                                <div class="flex items-center justify-center space-x-1.5">
+                                                                    <button type="button" @click="kurangiQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">-</button>
+                                                                    <span x-text="item.qty" class="w-6 text-center font-medium text-xs"></span>
+                                                                    <button type="button" @click="tambahQty(idx)" class="w-6 h-6 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">+</button>
+                                                                </div>
+                                                            </td>
+                                                            <td class="px-4 py-2.5 text-right font-bold text-gray-800 text-xs" x-text="formatRp(item.subtotal)"></td>
+                                                            <td class="px-4 py-2.5 text-center">
+                                                                <button type="button" @click="hapusRincian(idx)" class="text-red-500 hover:text-red-700 text-[10px] font-medium bg-red-50 p-1.5 rounded transition-colors" title="Hapus">
+                                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                                                </button>
+                                                            </td>
                                                         </tr>
-                                                    </thead>
-                                                    <tbody class="counter-reset-table">
-                                                        <!-- Pesan jika kosong -->
-                                                        <template x-if="!formData.rincian_biaya.some(r => r.groupId === group.id)">
-                                                            <tr><td colspan="6" class="px-3 py-4 text-center text-gray-400 italic text-xs">Belum ada tindakan yang dipilih untuk kategori ini.</td></tr>
-                                                        </template>
-                                                        
-                                                        <!-- Loop rincian biaya yang difilter khusus grup ini -->
-                                                        <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
-                                                            <template x-if="item.groupId === group.id">
-                                                                <tr class="border-b last:border-0 hover:bg-gray-50 bg-white counter-row">
-                                                                    <td class="px-3 py-2 text-center text-gray-500 font-medium text-xs counter-cell"></td>
-                                                                    <td class="px-3 py-2">
-                                                                        <div class="font-medium text-gray-800 text-xs" x-text="item.nama"></div>
-                                                                        <div class="text-[10px] text-gray-400 font-mono mt-0.5" x-text="item.kode"></div>
-                                                                    </td>
-                                                                    <td class="px-3 py-2 text-right text-xs" x-text="formatRp(item.harga_satuan)"></td>
-                                                                    <td class="px-3 py-2">
-                                                                        <div class="flex items-center justify-center space-x-1.5">
-                                                                            <button type="button" @click="kurangiQty(idx)" class="w-5 h-5 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">-</button>
-                                                                            <span x-text="item.qty" class="w-5 text-center font-medium text-xs"></span>
-                                                                            <button type="button" @click="tambahQty(idx)" class="w-5 h-5 rounded bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300 font-bold transition-colors text-xs">+</button>
-                                                                        </div>
-                                                                    </td>
-                                                                    <td class="px-3 py-2 text-right font-bold text-gray-800 text-xs" x-text="formatRp(item.subtotal)"></td>
-                                                                    <td class="px-3 py-2 text-center">
-                                                                        <button type="button" @click="hapusRincian(idx)" class="text-red-500 hover:text-red-700 text-[10px] font-medium bg-red-50 p-1 rounded transition-colors">
-                                                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                                                                        </button>
-                                                                    </td>
-                                                                </tr>
-                                                            </template>
-                                                        </template>
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
+                                                    </template>
+                                                </template>
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
                             </template>
@@ -1219,10 +1294,11 @@
                                 <p class="text-sm text-gray-500">Kelola tarif Puskesmas sesuai Perda/Ketentuan.</p>
                             </div>
                             <div class="flex flex-wrap gap-2">
-                                <button @click="exportTarif()" class="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
+                                <!-- Tombol Export/Import sekarang disembunyikan di layar HP (hidden sm:inline-block) -->
+                                <button @click="exportTarif()" class="hidden sm:inline-block bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
                                     Export JSON
                                 </button>
-                                <label class="bg-white hover:bg-gray-50 text-blue-600 text-sm font-medium py-2 px-3 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer">
+                                <label class="hidden sm:inline-block bg-white hover:bg-gray-50 text-blue-600 text-sm font-medium py-2 px-3 rounded-lg border border-blue-300 transition-colors shadow-sm cursor-pointer">
                                     Import JSON
                                     <input type="file" accept=".json" class="hidden" @change="handleImportTarif">
                                 </label>
@@ -1500,6 +1576,7 @@
                                     <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                                         <h4 class="text-sm font-semibold text-gray-700 mb-2">Informasi Pasien</h4>
                                         <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
+                                            <div class="text-gray-500">Tanggal:</div><div class="font-medium text-gray-900" x-text="formatTanggalID(formData.tanggal)"></div>
                                             <div class="text-gray-500">Nama:</div><div class="font-medium text-gray-900" x-text="formData.id_pasien || '-'"></div>
                                             <div class="text-gray-500">Umur:</div><div class="font-medium text-gray-900" x-text="formData.umur ? formData.umur + ' Tahun' : '-'"></div>
                                             <div class="text-gray-500">Alamat:</div><div class="font-medium text-gray-900" x-text="formData.alamat || '-'"></div>
@@ -1526,7 +1603,7 @@
                                     <!-- Rincian Biaya Preview -->
                                     <div>
                                         <h4 class="text-sm font-semibold text-gray-700 mb-2">Rincian Biaya</h4>
-                                        <div class="border border-gray-200 rounded-lg overflow-hidden">
+                                        <div class="border border-gray-200 rounded-lg overflow-x-auto custom-scrollbar">
                                             <table class="w-full text-sm text-left">
                                                 <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                     <tr>
@@ -1584,9 +1661,9 @@
                                             </table>
                                         </div>
                                         <div class="mt-5 flex justify-end">
-                                            <div class="text-center">
+                                            <div class="text-center max-w-[200px] sm:max-w-xs">
                                                 <p class="text-sm text-gray-500 mb-6">Petugas Pemeriksa</p>
-                                                <p class="font-bold text-gray-800 border-b border-gray-300 min-w-[150px] pb-1" x-text="formData.nama_petugas"></p>
+                                                <p class="font-bold text-gray-800 border-b border-gray-300 min-w-[150px] pb-1 break-words leading-tight" x-text="formData.nama_petugas"></p>
                                             </div>
                                         </div>
                                     </div>
@@ -1652,7 +1729,7 @@
                                         <!-- Rincian Biaya Preview -->
                                         <div>
                                             <h4 class="text-sm font-semibold text-gray-700 mb-2">Rincian Biaya</h4>
-                                            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                                            <div class="border border-gray-200 rounded-lg overflow-x-auto custom-scrollbar">
                                                 <table class="w-full text-sm text-left">
                                                     <thead class="bg-gray-100 text-gray-600 text-xs uppercase">
                                                         <tr>
@@ -1710,9 +1787,9 @@
                                                 </table>
                                             </div>
                                             <div class="mt-5 flex justify-end">
-                                                <div class="text-center">
+                                                <div class="text-center max-w-[200px] sm:max-w-xs">
                                                     <p class="text-sm text-gray-500 mb-6">Petugas Pemeriksa</p>
-                                                    <p class="font-bold text-gray-800 border-b border-gray-300 min-w-[150px] pb-1" x-text="selectedVisit.nama_petugas || 'Belum ditentukan'"></p>
+                                                    <p class="font-bold text-gray-800 border-b border-gray-300 min-w-[150px] pb-1 break-words leading-tight" x-text="selectedVisit.nama_petugas || 'Belum ditentukan'"></p>
                                                 </div>
                                             </div>
                                         </div>
@@ -1768,6 +1845,82 @@
                                 </button>
                                 <button type="button" @click="isDeleteModalOpen = false" class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 sm:w-auto sm:text-sm">
                                     Batal
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL REKAPITULASI -->
+                <div x-show="isRekapModalOpen" class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-rekap-title" role="dialog" aria-modal="true" style="display: none;">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="isRekapModalOpen = false" aria-hidden="true"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+                            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <div class="flex justify-between items-center mb-4 pb-2 border-b border-gray-200">
+                                    <h3 class="text-lg leading-6 font-bold text-gray-900 flex items-center" id="modal-rekap-title">
+                                        <svg class="mr-2 text-indigo-600" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
+                                        Rekapitulasi Kunjungan Pasien
+                                    </h3>
+                                    <button @click="isRekapModalOpen = false" class="text-gray-400 hover:text-gray-500">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                    </button>
+                                </div>
+                                
+                                <div class="mb-4 flex flex-col sm:flex-row sm:items-center gap-4">
+                                    <div class="flex items-center">
+                                        <label class="block text-sm font-medium text-gray-700 mr-3 w-20 sm:w-auto">Bulan:</label>
+                                        <input type="month" x-model="rekapBulan" class="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 text-gray-700 text-sm shadow-sm cursor-pointer hover:bg-gray-50 transition-colors">
+                                    </div>
+                                    <div class="flex items-center">
+                                        <label class="block text-sm font-medium text-gray-700 mr-3 w-20 sm:w-auto">Layanan:</label>
+                                        <select x-model="rekapUnitFilter" class="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 text-gray-700 text-sm shadow-sm cursor-pointer hover:bg-gray-50 transition-colors">
+                                            <option value="Semua">Semua Unit</option>
+                                            <option value="UGD/Gawat Darurat">UGD / Gawat Darurat</option>
+                                            <option value="Rawat Inap">Rawat Inap</option>
+                                            <option value="Kamar Bersalin">Kamar Bersalin</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="border border-gray-200 rounded-lg overflow-x-auto custom-scrollbar">
+                                    <table class="w-full text-sm text-left">
+                                        <thead class="bg-indigo-50 text-indigo-900 text-xs uppercase border-b border-indigo-100">
+                                            <tr>
+                                                <th class="px-4 py-3 text-center w-12">No</th>
+                                                <th class="px-4 py-3">Unit Layanan</th>
+                                                <th class="px-4 py-3 text-center">Jumlah Kunjungan</th>
+                                                <th class="px-4 py-3 text-right">Total Biaya (Rp)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <template x-if="dataRekap.length === 0">
+                                                <tr><td colspan="4" class="px-4 py-8 text-center text-gray-400 italic">Tidak ada data kunjungan pada bulan ini.</td></tr>
+                                            </template>
+                                            
+                                            <template x-for="(item, idx) in dataRekap" :key="item.unit">
+                                                <tr class="bg-white border-b border-gray-100 hover:bg-gray-50">
+                                                    <td class="px-4 py-3 text-center text-gray-500 font-medium" x-text="idx + 1"></td>
+                                                    <td class="px-4 py-3 font-semibold text-gray-800" x-text="item.unit"></td>
+                                                    <td class="px-4 py-3 text-center font-bold text-gray-700" x-text="item.jumlah"></td>
+                                                    <td class="px-4 py-3 text-right font-medium text-gray-900" x-text="formatRp(item.total)"></td>
+                                                </tr>
+                                            </template>
+                                        </tbody>
+                                        <tfoot class="bg-gray-50 font-bold border-t border-gray-200" x-show="dataRekap.length > 0">
+                                            <tr>
+                                                <td colspan="2" class="px-4 py-4 text-right text-gray-700 uppercase">Total Keseluruhan</td>
+                                                <td class="px-4 py-4 text-center text-indigo-700 text-base" x-text="totalRekap.jumlah"></td>
+                                                <td class="px-4 py-4 text-right text-green-600 text-base" x-text="formatRp(totalRekap.total)"></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="bg-gray-50 px-4 py-3 sm:px-6 flex flex-row-reverse">
+                                <button type="button" @click="isRekapModalOpen = false" class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:w-auto sm:text-sm">
+                                    Tutup
                                 </button>
                             </div>
                         </div>
