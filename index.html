@@ -971,27 +971,86 @@
                                      class="bg-white rounded-xl shadow-sm border overflow-hidden"
                                      :class="group.borderClass">
                                     
-                                    <!-- Header Group -->
-                                    <div class="px-4 py-3 border-b" :class="group.bgClass + ' ' + group.borderClass">
-                                        <h3 class="font-bold text-[15px]" :class="group.textClass" x-text="group.name"></h3>
+                                    <!-- Header Group (Diubah menjadi Flexbox Sejajar) -->
+                                    <div class="px-4 py-3 border-b flex justify-between items-center" :class="group.bgClass + ' ' + group.borderClass">
+                                        <h3 class="font-bold text-[14px] leading-tight pr-2" :class="group.textClass" x-text="group.name"></h3>
+                                        
+                                        <!-- Tombol (+) dengan Modal Alpine Custom yang Terpusat & Fitur Pencarian -->
+                                        <div class="relative flex-shrink-0" x-data="{ openSelect: false, searchQuery: '' }" title="Tambah Rincian">
+                                            <!-- Buka modal dan reset form pencarian -->
+                                            <button type="button" @click="openSelect = true; searchQuery = ''" class="w-8 h-8 rounded-full bg-white shadow-sm border flex items-center justify-center transition-colors focus:outline-none hover:bg-gray-50" :class="group.textClass + ' ' + group.borderClass">
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                            </button>
+
+                                            <!-- Modal Pilihan Tindakan (Terpusat) -->
+                                            <template x-teleport="body">
+                                                <div x-show="openSelect" class="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6" x-cloak>
+                                                    <!-- Backdrop Hitam Transparan -->
+                                                    <div x-show="openSelect" x-transition.opacity class="fixed inset-0 bg-gray-900 bg-opacity-50" @click="openSelect = false"></div>
+                                                    
+                                                    <!-- Panel Modal -->
+                                                    <div x-show="openSelect" 
+                                                         x-transition.scale.95 
+                                                         class="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col relative z-10 overflow-hidden border"
+                                                         :class="group.borderClass">
+                                                        
+                                                        <!-- Header Modal -->
+                                                        <div class="px-4 py-3 border-b flex justify-between items-center" :class="group.bgClass + ' ' + group.borderClass">
+                                                            <h3 class="text-sm font-bold" :class="group.textClass" x-text="'Pilih Tindakan ' + group.name.split('.')[0]"></h3>
+                                                            <button type="button" @click="openSelect = false" class="text-gray-400 hover:text-gray-600 focus:outline-none p-1 rounded-md hover:bg-white/50">
+                                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                                            </button>
+                                                        </div>
+
+                                                        <!-- Kolom Pencarian -->
+                                                        <div class="p-3 border-b border-gray-100 bg-gray-50" x-show="groupedTarifs[group.id].length > 0">
+                                                            <div class="relative">
+                                                                <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                                                                    <svg class="w-4 h-4 text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/></svg>
+                                                                </div>
+                                                                <input type="text" x-model="searchQuery" class="bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full pl-10 p-2.5 shadow-sm" placeholder="Cari nama tindakan atau kode...">
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        <!-- Daftar Tindakan (Bisa Di-scroll & Difilter) -->
+                                                        <div class="overflow-y-auto p-2 custom-scrollbar flex-1 bg-white">
+                                                            <!-- Pesan Jika Kategori Kosong -->
+                                                            <template x-if="groupedTarifs[group.id].length === 0">
+                                                                <div class="p-6 text-center text-gray-400 italic text-sm">Tidak ada tindakan di kategori ini.</div>
+                                                            </template>
+
+                                                            <!-- Pesan Jika Pencarian Tidak Ditemukan -->
+                                                            <template x-if="groupedTarifs[group.id].length > 0 && groupedTarifs[group.id].filter(i => i.nama.toLowerCase().includes(searchQuery.toLowerCase()) || i.kode.toLowerCase().includes(searchQuery.toLowerCase())).length === 0">
+                                                                <div class="p-6 text-center text-gray-500 text-sm">
+                                                                    Pencarian untuk "<span class="font-bold" x-text="searchQuery"></span>" tidak ditemukan.
+                                                                </div>
+                                                            </template>
+                                                            
+                                                            <div class="space-y-1">
+                                                                <!-- Looping Data yang Sudah di Filter Berdasarkan Nama atau Kode -->
+                                                                <template x-for="t in groupedTarifs[group.id].filter(i => i.nama.toLowerCase().includes(searchQuery.toLowerCase()) || i.kode.toLowerCase().includes(searchQuery.toLowerCase()))" :key="t.kode">
+                                                                    <button type="button" 
+                                                                            @click="tambahKeRincian(t, 1); openSelect = false" 
+                                                                            class="w-full text-left px-3 py-3 rounded-lg hover:bg-gray-50 focus:bg-gray-50 transition-colors flex justify-between items-center border border-transparent hover:border-gray-200">
+                                                                        <div class="flex flex-col pr-3">
+                                                                            <span class="text-sm font-medium text-gray-800 leading-tight" x-text="t.nama"></span>
+                                                                            <span class="text-[10px] text-gray-500 font-mono mt-1" x-text="t.kode"></span>
+                                                                        </div>
+                                                                        <div class="flex-shrink-0 text-right">
+                                                                            <span class="text-sm font-bold text-gray-700" x-text="formatRp(t.harga)"></span>
+                                                                        </div>
+                                                                    </button>
+                                                                </template>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
                                     </div>
 
-                                    <div class="p-4">
-                                        <!-- Dropdown Pilihan Tindakan Per Kategori -->
-                                        <div class="mb-4">
-                                            <select 
-                                                class="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 hover:bg-white transition-colors cursor-pointer"
-                                                @change="if($event.target.value) { 
-                                                    const t = groupedTarifs[group.id].find(x => x.kode === $event.target.value); 
-                                                    if(t) { tambahKeRincian(t, 1); $event.target.value = ''; } 
-                                                }">
-                                                <option value="" selected>+ Pilih & Tambahkan Rincian Biaya...</option>
-                                                <template x-for="t in groupedTarifs[group.id]" :key="t.kode">
-                                                    <option :value="t.kode" x-text="t.kode + ' - ' + t.nama + ' (' + formatRp(t.harga) + ')'"></option>
-                                                </template>
-                                            </select>
-                                        </div>
-
+                                    <!-- Padding disusutkan dari p-4 menjadi p-3 agar lebih padat di HP -->
+                                    <div class="p-3">
                                         <!-- Tabel Rincian Biaya Khusus Group Ini -->
                                         <div class="border rounded-md overflow-hidden" :class="group.borderClass">
                                             <div class="px-3 py-2 border-b" :class="group.bgClass + ' ' + group.borderClass">
