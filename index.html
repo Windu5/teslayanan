@@ -23,7 +23,6 @@
     <script>
         window.addEventListener('error', function(e) {
             if (e.message.includes('export') || e.message.includes('module')) {
-                // Mengganti alert dengan elemen UI agar tidak memblokir browser
                 const errDiv = document.createElement('div');
                 errDiv.className = 'fixed top-0 left-0 w-full bg-red-500 text-white p-3 text-center z-[9999] font-bold shadow-md';
                 errDiv.innerText = "Kesalahan Skrip: " + e.message;
@@ -47,6 +46,13 @@
         .counter-reset-table { counter-reset: row-num; }
         .counter-row { counter-increment: row-num; }
         .counter-cell::before { content: counter(row-num) "."; }
+
+        /* Animasi Tombol PWA */
+        @keyframes bounce-subtle {
+            0%, 100% { transform: translateY(-5%); animation-timing-function: cubic-bezier(0.8,0,1,1); }
+            50% { transform: translateY(0); animation-timing-function: cubic-bezier(0,0,0.2,1); }
+        }
+        .animate-bounce-subtle { animation: bounce-subtle 2s infinite; }
     </style>
 
     <!-- Modul Logika Aplikasi -->
@@ -54,8 +60,6 @@
         import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/module.esm.js';
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        
-        // Tambahan memoryLocalCache di-import untuk kebutuhan development
         import { collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, updateDoc, deleteDoc, initializeFirestore, persistentLocalCache, memoryLocalCache } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Konfigurasi Kustom Firebase Asli Anda
@@ -71,19 +75,14 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         
-        // Cek apakah sedang dalam mode Development (localhost/127.0.0.1)
         const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname === '';
 
-        // Gunakan memoryLocalCache saat development agar data tidak nyangkut/stale.
-        // Gunakan persistentLocalCache saat production untuk fitur offline.
         const db = initializeFirestore(app, {
             localCache: isDevelopment ? memoryLocalCache() : persistentLocalCache()
         });
 
-        // Gunakan ID project asli Anda
         const appId = 'puskesmas-layanan';
 
-        // Mendaftarkan logic Alpine Component
         Alpine.data('puskesmasApp', () => ({
             user: null,
             activeTab: 'kunjungan',
@@ -92,38 +91,39 @@
             notification: { show: false, message: '', type: 'success' },
             tarifs: [],
             visits: [],
-            officers: [], // State untuk daftar petugas
+            officers: [], 
             kategoriList: ['Semua'],
-            profesiList: ['Dokter Umum', 'Dokter Gigi', 'Perawat', 'Bidan', 'Apoteker', 'Analis Kesehatan', 'Petugas Pendaftaran', 'Lainnya'], // Daftar profesi standar
+            profesiList: ['Dokter Umum', 'Dokter Gigi', 'Perawat', 'Bidan', 'Apoteker', 'Analis Kesehatan', 'Petugas Pendaftaran', 'Lainnya'],
             
             unsubscribeTarif: null,
             unsubscribeVisit: null,
-            unsubscribeOfficer: null, // Listener untuk petugas
+            unsubscribeOfficer: null,
 
             // State untuk Login
             password: '',
 
-            // State untuk Manajemen Tarif & Modal Preview
-            searchTarifQuery: '', // State baru untuk fitur pencarian tarif
+            // State Modal
+            searchTarifQuery: '',
             isTarifModalOpen: false,
-            isPreviewModalOpen: false, // Menambahkan state untuk modal preview
-            isVisitPreviewModalOpen: false, // State modal preview daftar kunjungan
-            
-            // State untuk Modal Rekapitulasi
+            isPreviewModalOpen: false,
+            isVisitPreviewModalOpen: false,
             isRekapModalOpen: false,
             rekapBulan: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0'),
-            rekapUnitFilter: 'Semua', // State baru untuk filter unit di tabel rekap
+            rekapUnitFilter: 'Semua',
             
-            // State untuk Manajemen Petugas
             isOfficerModalOpen: false,
             isOfficerEditMode: false,
             formOfficer: { id: '', nama: '', profesi: '', aktif: true },
 
-            selectedVisit: null, // Data kunjungan yang dipilih
-            isDeleteModalOpen: false, // State modal hapus kunjungan
-            visitToDelete: null, // ID kunjungan yang akan dihapus
+            selectedVisit: null,
+            isDeleteModalOpen: false,
+            visitToDelete: null,
             isEditMode: false,
             formTarif: { kode: '', nama: '', kategori: '', harga: 0, aktif: true },
+
+            // Logika PWA (Instal Custom)
+            deferredPrompt: null,
+            isInstallable: false,
 
             formData: {
                 tanggal: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0'),
@@ -137,7 +137,6 @@
                 nama_petugas: '',
             },
 
-            // --- Definisi Grup Kategori Baru (Ditambahkan Tema Warna) ---
             layananGroups: [
                 { id: 'A', name: 'A. Pelayanan Ruang UGD/Ranap', bgClass: 'bg-blue-50', borderClass: 'border-blue-200', textClass: 'text-blue-800' },
                 { id: 'B', name: 'B. Tindakan Medik Umum (UGD/Ranap)', bgClass: 'bg-emerald-50', borderClass: 'border-emerald-200', textClass: 'text-emerald-800' },
@@ -146,24 +145,19 @@
                 { id: 'E', name: 'E. Laboratorium', bgClass: 'bg-cyan-50', borderClass: 'border-cyan-200', textClass: 'text-cyan-800' }
             ],
 
-            // Fungsi Pintar untuk mapping kategori master tarif ke Grup UI
             getTarifGroupId(tarif) {
-                if (tarif.kode && tarif.kode.startsWith('AMB-')) return 'A'; // Ambulans dialokasikan ke tabel rincian A (UGD)
-                
+                if (tarif.kode && tarif.kode.startsWith('AMB-')) return 'A'; 
                 const cat = (tarif.kategori || '').toLowerCase();
                 if (cat.includes('lab') || cat.includes('laboratorium')) return 'E';
                 if (cat.includes('diagnost') || cat.includes('radiologi') || cat.includes('rontgen') || cat.includes('usg') || cat.includes('ekg')) return 'D';
                 if (cat.includes('bersalin') || cat.includes('kia') || cat.includes('nifas') || cat.includes('persalinan') || cat.includes('bidan')) return 'C';
                 if (cat.includes('umum') || cat.includes('tindakan medik') || cat.includes('bedah minor')) return 'B';
                 if (cat.includes('ugd') || cat.includes('ranap') || cat.includes('pelayanan') || cat.includes('karcis') || cat.includes('pendaftaran') || cat.includes('konsultasi')) return 'A';
-                return 'B'; // Fallback otomatis ke Tindakan Medik Umum jika kategori tidak dikenali
+                return 'B'; 
             },
 
-            // Getter untuk data tarif yang sudah difilter oleh fitur pencarian
             get filteredTarifs() {
-                if (this.searchTarifQuery.trim() === '') {
-                    return this.tarifs;
-                }
+                if (this.searchTarifQuery.trim() === '') return this.tarifs;
                 const query = this.searchTarifQuery.toLowerCase();
                 return this.tarifs.filter(t => 
                     (t.kode && t.kode.toLowerCase().includes(query)) ||
@@ -175,32 +169,25 @@
             get groupedTarifs() {
                 const groups = { A: [], B: [], C: [], D: [], E: [] };
                 this.tarifs.forEach(t => {
-                    if (t.aktif === false) return; // Sembunyikan tarif non-aktif
-                    if (t.kode && t.kode.startsWith('AMB-')) return; // Sembunyikan Ambulans dari dropdown manual (karena sudah ada form rujukan di bawah)
-                    
+                    if (t.aktif === false) return; 
+                    if (t.kode && t.kode.startsWith('AMB-')) return; 
                     const gId = this.getTarifGroupId(t);
-                    if (groups[gId]) {
-                        groups[gId].push(t);
-                    }
+                    if (groups[gId]) groups[gId].push(t);
                 });
                 return groups;
             },
 
-            // Ambil khusus data tarif dengan kode berawalan "AMB-" untuk dropdown rujukan
             get ambulanceTarifs() {
                 return this.tarifs.filter(t => t.kode.startsWith('AMB-') && t.aktif !== false);
             },
 
-            // Logika untuk Rekapitulasi Data Bulanan
             get dataRekap() {
                 const groups = {};
                 if (!this.rekapBulan) return [];
-
                 const [rekapYear, rekapMonth] = this.rekapBulan.split('-');
 
                 this.visits.forEach(v => {
                     let match = false;
-                    // Mencari kecocokan berdasarkan format 'YYYY-MM' dari tanggal_raw, atau mundur ke tanggal biasa jika data lama
                     if (v.tanggal_raw) {
                         if (v.tanggal_raw.startsWith(this.rekapBulan)) match = true;
                     } else if (v.tanggal) {
@@ -214,27 +201,18 @@
 
                     if (match) {
                         const unit = v.unit_asal || 'Tidak Diketahui';
-                        
-                        // Melewati (skip) data jika filter tidak sesuai dengan unit saat ini
-                        if (this.rekapUnitFilter !== 'Semua' && unit !== this.rekapUnitFilter) {
-                            return; 
-                        }
-
+                        if (this.rekapUnitFilter !== 'Semua' && unit !== this.rekapUnitFilter) return; 
                         if (!groups[unit]) groups[unit] = { jumlah: 0, total: 0 };
                         groups[unit].jumlah += 1;
                         groups[unit].total += (v.total_biaya || 0);
                     }
                 });
 
-                // Ubah objek menjadi array agar mudah di-looping di tabel
                 return Object.keys(groups).map(key => ({
-                    unit: key,
-                    jumlah: groups[key].jumlah,
-                    total: groups[key].total
-                })).sort((a, b) => b.jumlah - a.jumlah); // Urutkan dari jumlah kunjungan terbanyak
+                    unit: key, jumlah: groups[key].jumlah, total: groups[key].total
+                })).sort((a, b) => b.jumlah - a.jumlah); 
             },
 
-            // Hitung Grand Total untuk tabel rekapitulasi
             get totalRekap() {
                 return this.dataRekap.reduce((acc, curr) => {
                     acc.jumlah += curr.jumlah;
@@ -244,44 +222,39 @@
             },
 
             get totalBiaya() {
-                // Menjumlahkan rincian tindakan
                 let rincianTotal = this.formData.rincian_biaya.reduce((sum, item) => sum + item.subtotal, 0);
-                
-                // Tambahkan otomatis secara terpisah ke total jika opsi Rujukan aktif
                 if (this.formData.unit_asal === 'UGD/Gawat Darurat' && this.formData.rujukan.status && this.formData.rujukan.id_tarif_ambulan) {
                     const amb = this.tarifs.find(t => t.kode === this.formData.rujukan.id_tarif_ambulan);
                     if (amb) rincianTotal += amb.harga;
                 }
-                
                 return rincianTotal;
             },
 
             init() {
+                this.initPWA(); // Aktifkan pendeteksi PWA
                 window.addEventListener('online', () => this.isOffline = false);
                 window.addEventListener('offline', () => this.isOffline = true);
 
                 this.$watch('formData.rujukan.status', () => {
                     if (!this.formData.rujukan.status) {
-                        this.formData.rujukan.id_tarif_ambulan = ''; // Reset jika dimatikan
+                        this.formData.rujukan.id_tarif_ambulan = ''; 
                     }
                 });
 
-                // FAIL-SAFE: Timeout jika Firebase gagal inisialisasi akibat cache/blokir
                 const loadingTimeout = setTimeout(() => {
                     if (this.isLoading) {
                         this.isLoading = false;
                         this.showNotification("Gagal memuat sistem: Koneksi terblokir atau lambat. Harap tekan Ctrl + F5.", "error");
                     }
-                }, 8000); // Batas tunggu 8 detik
+                }, 8000); 
 
                 onAuthStateChanged(auth, (user) => {
-                    clearTimeout(loadingTimeout); // Berhasil terhubung, batalkan fail-safe
+                    clearTimeout(loadingTimeout); 
                     this.user = user;
                     this.isLoading = false;
                     if (user) {
                         this.listenToFirestore();
                     } else {
-                        // Hentikan langganan data saat logout agar tidak terjadi error permission
                         if (this.unsubscribeTarif) this.unsubscribeTarif();
                         if (this.unsubscribeVisit) this.unsubscribeVisit();
                         if (this.unsubscribeOfficer) this.unsubscribeOfficer();
@@ -292,10 +265,35 @@
                 });
             },
 
+            // Fungsi Inisialisasi PWA
+            initPWA() {
+                window.addEventListener('beforeinstallprompt', (e) => {
+                    e.preventDefault(); // Cegah pop-up default langsung muncul
+                    this.deferredPrompt = e; // Simpan event ke memori
+                    this.isInstallable = true; // Munculkan tombol di UI
+                });
+
+                window.addEventListener('appinstalled', () => {
+                    this.isInstallable = false; // Sembunyikan tombol setelah terinstal
+                    this.deferredPrompt = null;
+                });
+            },
+
+            // Fungsi Memanggil Pop-up Instal
+            async promptInstall() {
+                if (this.deferredPrompt) {
+                    this.deferredPrompt.prompt();
+                    const { outcome } = await this.deferredPrompt.userChoice;
+                    if (outcome === 'accepted') {
+                        this.isInstallable = false; // Sembunyikan tombol jika user setuju
+                    }
+                    this.deferredPrompt = null;
+                }
+            },
+
             async handleLogin() {
                 this.isLoading = true;
                 try {
-                    // Login langsung menggunakan email yang sudah ditentukan (hardcoded)
                     await signInWithEmailAndPassword(auth, 'arifuddinanshory11@gmail.com', this.password);
                     this.showNotification("Login berhasil!", "success");
                     this.password = '';
@@ -316,12 +314,10 @@
             },
 
             listenToFirestore() {
-                // Hentikan listener lama jika ada untuk mencegah duplikasi data
                 if (this.unsubscribeTarif) this.unsubscribeTarif();
                 if (this.unsubscribeVisit) this.unsubscribeVisit();
                 if (this.unsubscribeOfficer) this.unsubscribeOfficer();
 
-                // Listener untuk Tarif Layanan
                 this.unsubscribeTarif = onSnapshot(
                     collection(db, 'artifacts', appId, 'public', 'data', 'tarif_layanan'), 
                     (snap) => {
@@ -335,7 +331,6 @@
                     }
                 );
 
-                // Listener untuk Data Kunjungan
                 this.unsubscribeVisit = onSnapshot(
                     collection(db, 'artifacts', appId, 'public', 'data', 'kunjungan'), 
                     (snap) => {
@@ -350,7 +345,6 @@
                     }
                 );
 
-                // Listener untuk Data Petugas
                 this.unsubscribeOfficer = onSnapshot(
                     collection(db, 'artifacts', appId, 'public', 'data', 'petugas'), 
                     (snap) => {
@@ -359,7 +353,7 @@
                     (error) => {
                         console.error("Error petugas:", error);
                         if(error.code === 'permission-denied') {
-                            this.showNotification("Akses ditolak (Petugas): Tambahkan Rules untuk '/artifacts/puskesmas-layanan/public/data/petugas/{doc}' di Firebase.", "error");
+                            this.showNotification("Akses ditolak (Petugas): Tambahkan Rules untuk Firebase.", "error");
                         }
                     }
                 );
@@ -367,7 +361,7 @@
 
             tambahKeRincian(tarifObj, qty) {
                 if (!tarifObj || qty <= 0) return;
-                const groupId = this.getTarifGroupId(tarifObj); // Menyimpan ID Grup
+                const groupId = this.getTarifGroupId(tarifObj); 
                 const existingIndex = this.formData.rincian_biaya.findIndex(item => item.kode === tarifObj.kode);
                 
                 if (existingIndex >= 0) {
@@ -380,7 +374,7 @@
                         harga_satuan: tarifObj.harga,
                         qty: qty,
                         subtotal: tarifObj.harga * qty,
-                        groupId: groupId // Agar bisa difilter di tabel khusus grupnya
+                        groupId: groupId 
                     });
                 }
             },
@@ -405,7 +399,7 @@
 
             async handleSubmit() {
                 if (!this.formData.id_pasien) {
-                    this.isPreviewModalOpen = false; // Tutup modal jika terbuka
+                    this.isPreviewModalOpen = false; 
                     return this.showNotification("Nama Pasien harus diisi", "error");
                 }
                 if (!this.formData.nama_petugas) {
@@ -417,7 +411,6 @@
                     return this.showNotification("Tambahkan minimal 1 tindakan/layanan", "error");
                 }
 
-                // Format tanggal dari input browser (YYYY-MM-DD) menjadi format Indonesia (DD/MM/YYYY)
                 const [y, m, d] = this.formData.tanggal.split('-');
                 const formattedDate = `${parseInt(d)}/${parseInt(m)}/${y}`;
 
@@ -426,13 +419,13 @@
                     umur: this.formData.umur,
                     alamat: this.formData.alamat,
                     tanggal: formattedDate,
-                    tanggal_raw: this.formData.tanggal, // Menyimpan format mentah (YYYY-MM-DD) untuk kemudahan sorting data di masa depan
+                    tanggal_raw: this.formData.tanggal, 
                     timestamp: serverTimestamp(),
                     unit_asal: this.formData.unit_asal,
                     catatan: this.formData.catatan,
                     rincian_biaya: this.formData.rincian_biaya.map(i => ({...i})), 
                     total_biaya: this.totalBiaya,
-                    status_pemeriksaan: 'Belum Diperiksa', // Status pemeriksaan default
+                    status_pemeriksaan: 'Belum Diperiksa', 
                     nama_petugas: this.formData.nama_petugas,
                 };
 
@@ -448,14 +441,13 @@
                 try {
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'kunjungan'), payload);
                     this.showNotification("Data kunjungan berhasil disimpan!", "success");
-                    this.isPreviewModalOpen = false; // Tutup modal preview jika sukses
+                    this.isPreviewModalOpen = false; 
                     this.resetForm();
                 } catch (err) {
                     this.showNotification("Gagal menyimpan: " + err.message, "error");
                 }
             },
 
-            // Modifikasi fungsi resetForm agar menampilkan notifikasi jika ditekan manual
             resetForm(changeTab = true) {
                 this.formData = {
                     tanggal: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0'),
@@ -468,7 +460,6 @@
                 if (changeTab) {
                     this.activeTab = 'kunjungan';
                 } else {
-                    // Munculkan notifikasi saat tombol Bersihkan Form diklik (changeTab == false)
                     this.showNotification("Formulir berhasil dibersihkan", "success");
                 }
             },
@@ -508,7 +499,6 @@
                 }
             },
 
-            // --- FUNGSI MANAJEMEN PETUGAS --- //
             openModalOfficer(isEdit, officerData = null) {
                 this.isOfficerEditMode = isEdit;
                 if (isEdit && officerData) {
@@ -530,7 +520,6 @@
                 
                 try {
                     if (this.isOfficerEditMode) {
-                        // Update existing
                         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'petugas', this.formOfficer.id);
                         await updateDoc(docRef, {
                             nama: this.formOfficer.nama,
@@ -539,7 +528,6 @@
                         });
                         this.showNotification("Data petugas berhasil diperbarui!", "success");
                     } else {
-                        // Create new
                         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'petugas'), {
                             nama: this.formOfficer.nama,
                             profesi: this.formOfficer.profesi,
@@ -563,7 +551,6 @@
                 }
             },
 
-            // --- FUNGSI CETAK STRUK/KWITANSI --- //
             cetakKwitansi(visit) {
                 const win = window.open('', '_blank');
                 if (!win) {
@@ -571,7 +558,6 @@
                 }
 
                 let rincianHtml = '';
-                // Mengurutkan dan mengelompokkan tampilan berdasarkan kategori (A, B, C, D, E) pada Struk
                 this.layananGroups.forEach(group => {
                     const itemsInGroup = visit.rincian_biaya.filter(item => item.groupId === group.id);
                     if (itemsInGroup.length > 0) {
@@ -597,7 +583,6 @@
 
                 let rujukanText = 'Tidak';
                 let transportText = '-';
-                
                 if (visit.rujukan && visit.rujukan.status) {
                     rujukanText = `Ya, ke ${visit.rujukan.rs_tujuan || 'Rumah Sakit Tujuan'}`;
                     transportText = `Biaya Ambulans: ${this.formatRp(visit.rujukan.biaya || 0)}`;
@@ -605,7 +590,6 @@
 
                 const officerName = visit.nama_petugas ? visit.nama_petugas : (this.user && this.user.email ? this.user.email.split('@')[0] : 'Petugas');
 
-                // Menggunakan teknik pemisahan string tag script agar tidak terdeteksi sebagai penutup kode oleh browser
                 const htmlContent = `
                     <html>
                     <head>
@@ -698,7 +682,6 @@
                 win.document.close();
             },
 
-            // --- FUNGSI MANAJEMEN TARIF --- //
             openModalTarif(isEdit, tarifData = null) {
                 this.isEditMode = isEdit;
                 if (isEdit && tarifData) {
@@ -777,13 +760,11 @@
                         let count = 0;
                         
                         for (const tarif of importedData) {
-                            // Mapping pintar agar mendeteksi nama key JSON asli dan custom (seperti hasil konversi Excel)
                             const rawKode = tarif.kode || tarif.Kode;
                             const rawNama = tarif.nama || tarif["Nama Layanan / Tindakan"] || tarif.Nama;
                             const rawKategori = tarif.kategori || tarif.Kategori || 'Lain-lain';
                             const rawHarga = tarif.harga !== undefined ? tarif.harga : (tarif["Harga (Rp)"] !== undefined ? tarif["Harga (Rp)"] : 0);
                             
-                            // Mendeteksi status aktif
                             let rawAktif = true;
                             if (tarif.aktif !== undefined) {
                                 rawAktif = tarif.aktif;
@@ -896,9 +877,7 @@
                 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div class="flex justify-between items-center py-4">
                         <div class="flex items-center space-x-3">
-                            <!-- Mengubah ikon header agar berbentuk bulat sempurna mengikuti gambar referensi -->
                             <div class="bg-green-500 p-2.5 rounded-full text-white">
-                                <!-- Icon Activity -->
                                 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-6 4 12 3-6h4"></path></svg>
                             </div>
                             <div>
@@ -917,14 +896,12 @@
                             <span class="text-gray-500 hidden sm:inline-block">
                                 User: <span class="font-mono bg-gray-100 px-1 rounded" x-text="user ? user.email : '---'"></span>
                             </span>
-                            <!-- Tombol Keluar hanya icon -->
                             <button @click="handleLogout()" class="flex text-red-600 hover:text-red-800 items-center justify-center border border-red-200 bg-red-50 p-2 rounded-lg transition-colors" title="Keluar">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
                             </button>
                         </div>
                     </div>
                     
-                    <!-- Navigasi Desktop (Disembunyikan di Mobile) -->
                     <nav class="hidden sm:flex space-x-8 mt-2 overflow-x-auto">
                         <button @click="activeTab = 'kunjungan'" :class="activeTab === 'kunjungan' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'" class="flex items-center space-x-2 px-4 py-3 border-b-2 font-medium text-sm transition-colors">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
@@ -950,7 +927,6 @@
                 </div>
             </header>
 
-            <!-- Main Content Area -->
             <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-2">
                 
                 <!-- TAB: DAFTAR KUNJUNGAN -->
@@ -982,10 +958,8 @@
                                         <td colspan="7" class="px-6 py-8 text-center text-gray-500 italic">Belum ada data kunjungan.</td>
                                     </tr>
                                 </template>
-                                <!-- Tambahkan (v, index) untuk mengambil index loop saat ini -->
                                 <template x-for="(v, index) in visits" :key="v.id">
                                     <tr class="bg-white border-b hover:bg-gray-50">
-                                        <!-- Rumus kebalikan: (Total Visits - Current Index) -->
                                         <td class="px-4 py-4 text-center font-medium text-gray-500" x-text="visits.length - index"></td>
                                         
                                         <td class="px-6 py-4 whitespace-nowrap">
@@ -1040,9 +1014,6 @@
 
                 <!-- TAB: TAMBAH KUNJUNGAN -->
                 <div x-show="activeTab === 'tambah'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    
-                    <!-- Kolom Kiri: Identitas Pasien & Daftar Tarif -->
-                    <!-- Tambahkan min-w-0 di sini agar Grid tidak meluber mengikuti lebar tabel -->
                     <div class="lg:col-span-2 space-y-6 min-w-0">
                         
                         <!-- Panel Identitas Pasien -->
@@ -1083,7 +1054,7 @@
                             </div>
                         </div>
 
-                        <!-- PANEL DAFTAR TINDAKAN KELOMPOK (MENGGANTIKAN VERSI LAMA) -->
+                        <!-- PANEL DAFTAR TINDAKAN KELOMPOK -->
                         <div class="space-y-6">
                             <h2 class="text-xl font-bold text-gray-800 flex items-center">
                                 <svg class="mr-2 text-green-600" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -1091,35 +1062,24 @@
                             </h2>
 
                             <template x-for="group in layananGroups" :key="group.id">
-                                <!-- Tampilkan section hanya jika ada Master Tarif di kategori ini ATAU pengguna sudah terlanjur menginputnya -->
                                 <div x-show="groupedTarifs[group.id].length > 0 || formData.rincian_biaya.some(r => r.groupId === group.id)" 
                                      class="bg-white rounded-xl shadow-sm border overflow-hidden"
                                      :class="group.borderClass">
                                     
-                                    <!-- Header Group (Diubah menjadi Flexbox Sejajar) -->
                                     <div class="px-4 py-3 border-b flex justify-between items-center" :class="group.bgClass + ' ' + group.borderClass">
                                         <h3 class="font-bold text-[14px] leading-tight pr-2" :class="group.textClass" x-text="group.name"></h3>
                                         
-                                        <!-- Tombol (+) dengan Modal Alpine Custom yang Terpusat & Fitur Pencarian -->
+                                        <!-- Tombol (+) -->
                                         <div class="relative flex-shrink-0" x-data="{ openSelect: false, searchQuery: '' }" title="Tambah Rincian">
-                                            <!-- Buka modal dan reset form pencarian -->
                                             <button type="button" @click="openSelect = true; searchQuery = ''" class="w-8 h-8 rounded-full bg-white shadow-sm border flex items-center justify-center transition-colors focus:outline-none hover:bg-gray-50" :class="group.textClass + ' ' + group.borderClass">
                                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                                             </button>
 
-                                            <!-- Modal Pilihan Tindakan (Terpusat) -->
+                                            <!-- Modal Pencarian Tindakan -->
                                             <template x-teleport="body">
                                                 <div x-show="openSelect" class="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6" x-cloak>
-                                                    <!-- Backdrop Hitam Transparan -->
                                                     <div x-show="openSelect" x-transition.opacity class="fixed inset-0 bg-gray-900 bg-opacity-50" @click="openSelect = false"></div>
-                                                    
-                                                    <!-- Panel Modal -->
-                                                    <div x-show="openSelect" 
-                                                         x-transition.scale.95 
-                                                         class="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col relative z-10 overflow-hidden border"
-                                                         :class="group.borderClass">
-                                                        
-                                                        <!-- Header Modal -->
+                                                    <div x-show="openSelect" x-transition.scale.95 class="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col relative z-10 overflow-hidden border" :class="group.borderClass">
                                                         <div class="px-4 py-3 border-b flex justify-between items-center" :class="group.bgClass + ' ' + group.borderClass">
                                                             <h3 class="text-sm font-bold" :class="group.textClass" x-text="'Pilih Tindakan ' + group.name.split('.')[0]"></h3>
                                                             <button type="button" @click="openSelect = false" class="text-gray-400 hover:text-gray-600 focus:outline-none p-1 rounded-md hover:bg-white/50">
@@ -1127,7 +1087,6 @@
                                                             </button>
                                                         </div>
 
-                                                        <!-- Kolom Pencarian -->
                                                         <div class="p-3 border-b border-gray-100 bg-gray-50" x-show="groupedTarifs[group.id].length > 0">
                                                             <div class="relative">
                                                                 <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
@@ -1137,26 +1096,18 @@
                                                             </div>
                                                         </div>
                                                         
-                                                        <!-- Daftar Tindakan (Bisa Di-scroll & Difilter) -->
                                                         <div class="overflow-y-auto p-2 custom-scrollbar flex-1 bg-white">
-                                                            <!-- Pesan Jika Kategori Kosong -->
                                                             <template x-if="groupedTarifs[group.id].length === 0">
                                                                 <div class="p-6 text-center text-gray-400 italic text-sm">Tidak ada tindakan di kategori ini.</div>
                                                             </template>
-
-                                                            <!-- Pesan Jika Pencarian Tidak Ditemukan -->
                                                             <template x-if="groupedTarifs[group.id].length > 0 && groupedTarifs[group.id].filter(i => i.nama.toLowerCase().includes(searchQuery.toLowerCase()) || i.kode.toLowerCase().includes(searchQuery.toLowerCase())).length === 0">
                                                                 <div class="p-6 text-center text-gray-500 text-sm">
                                                                     Pencarian untuk "<span class="font-bold" x-text="searchQuery"></span>" tidak ditemukan.
                                                                 </div>
                                                             </template>
-                                                            
                                                             <div class="space-y-1">
-                                                                <!-- Looping Data yang Sudah di Filter Berdasarkan Nama atau Kode -->
                                                                 <template x-for="t in groupedTarifs[group.id].filter(i => i.nama.toLowerCase().includes(searchQuery.toLowerCase()) || i.kode.toLowerCase().includes(searchQuery.toLowerCase()))" :key="t.kode">
-                                                                    <button type="button" 
-                                                                            @click="tambahKeRincian(t, 1); openSelect = false" 
-                                                                            class="w-full text-left px-3 py-3 rounded-lg hover:bg-gray-50 focus:bg-gray-50 transition-colors flex justify-between items-center border border-transparent hover:border-gray-200">
+                                                                    <button type="button" @click="tambahKeRincian(t, 1); openSelect = false" class="w-full text-left px-3 py-3 rounded-lg hover:bg-gray-50 focus:bg-gray-50 transition-colors flex justify-between items-center border border-transparent hover:border-gray-200">
                                                                         <div class="flex flex-col pr-3">
                                                                             <span class="text-sm font-medium text-gray-800 leading-tight" x-text="t.nama"></span>
                                                                             <span class="text-[10px] text-gray-500 font-mono mt-1" x-text="t.kode"></span>
@@ -1174,16 +1125,14 @@
                                         </div>
                                     </div>
 
-                                    <!-- Tabel Rincian Langsung (Menghilangkan Nested Card "Rincian Biaya") -->
+                                    <!-- Tabel Rincian Tanpa Header untuk Mobile UX -->
                                     <div class="overflow-x-auto custom-scrollbar bg-white">
                                         <table class="w-full text-sm text-left text-gray-600 min-w-[500px]">
                                             <tbody class="counter-reset-table">
-                                                <!-- Pesan jika kosong -->
                                                 <template x-if="!formData.rincian_biaya.some(r => r.groupId === group.id)">
                                                     <tr><td colspan="6" class="px-4 py-5 text-center text-gray-400 italic text-xs">Belum ada tindakan. Klik tombol <span class="font-bold">+</span> di atas untuk menambahkan.</td></tr>
                                                 </template>
                                                 
-                                                <!-- Loop rincian biaya yang difilter khusus grup ini -->
                                                 <template x-for="(item, idx) in formData.rincian_biaya" :key="idx">
                                                     <template x-if="item.groupId === group.id">
                                                         <tr class="border-b last:border-0 hover:bg-gray-50 bg-white counter-row">
@@ -1216,7 +1165,7 @@
                             </template>
                         </div>
 
-                        <!-- Opsi Rujukan UGD (Dipindah ke bawah Rincian Biaya) -->
+                        <!-- Opsi Rujukan UGD -->
                         <template x-if="formData.unit_asal === 'UGD/Gawat Darurat'">
                             <div class="p-5 bg-amber-50 rounded-xl border border-amber-200 shadow-sm mt-6">
                                 <label class="flex items-center space-x-3 text-amber-900 font-semibold cursor-pointer">
@@ -1244,7 +1193,7 @@
                             </div>
                         </template>
 
-                        <!-- Panel Catatan Tambahan -->
+                        <!-- Panel Catatan & Petugas -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mt-6">
                             <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 flex items-center">
                                 <svg class="mr-2 text-gray-500" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -1255,7 +1204,6 @@
                             </div>
                         </div>
 
-                        <!-- Panel Petugas Pemeriksa -->
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                             <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2 flex items-center">
                                 <svg class="mr-2 text-green-600" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
@@ -1271,19 +1219,16 @@
                                 </select>
                             </div>
                         </div>
-
                     </div>
 
                     <!-- Kolom Kanan: Ringkasan Pembayaran -->
                     <div class="lg:col-span-1">
                         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-24">
                             <h2 class="text-lg font-bold text-gray-800 mb-4">Total & Pembayaran</h2>
-                            
                             <div class="bg-gray-50 rounded-lg p-4 mb-6 border border-gray-100 text-center">
                                 <div class="text-sm text-gray-500 mb-1">Total Tagihan</div>
                                 <div class="text-3xl font-bold text-green-600" x-text="formatRp(totalBiaya)"></div>
                             </div>
-
                             <button @click="isPreviewModalOpen = true" 
                                     :disabled="!formData.nama_petugas"
                                     :class="!formData.nama_petugas ? 'opacity-50 cursor-not-allowed bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'"
@@ -1298,14 +1243,12 @@
                 <!-- TAB: MASTER TARIF -->
                 <div x-show="activeTab === 'tarif'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="p-4 sm:p-6 border-b border-gray-200 flex flex-col gap-4">
-                        <!-- Bagian Judul dan Tombol Aksi -->
                         <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                             <div>
                                 <h2 class="text-lg font-semibold text-gray-800">Data Master Tarif Layanan</h2>
                                 <p class="text-sm text-gray-500">Kelola tarif Puskesmas sesuai Perda/Ketentuan.</p>
                             </div>
                             <div class="flex flex-wrap gap-2">
-                                <!-- Tombol Export/Import sekarang disembunyikan di layar HP (hidden sm:inline-block) -->
                                 <button @click="exportTarif()" class="hidden sm:inline-block bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 px-3 rounded-lg border border-gray-300 transition-colors shadow-sm">
                                     Export JSON
                                 </button>
@@ -1320,7 +1263,6 @@
                             </div>
                         </div>
 
-                        <!-- Kolom Pencarian Master Tarif -->
                         <div class="relative w-full sm:max-w-md">
                             <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
                                 <svg class="w-4 h-4 text-gray-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/></svg>
@@ -1342,7 +1284,6 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <!-- Tampilan saat database murni kosong -->
                                 <template x-if="tarifs.length === 0">
                                     <tr>
                                         <td colspan="6" class="px-6 py-12 text-center">
@@ -1354,8 +1295,6 @@
                                         </td>
                                     </tr>
                                 </template>
-
-                                <!-- Tampilan saat hasil pencarian tidak ditemukan -->
                                 <template x-if="tarifs.length > 0 && filteredTarifs.length === 0">
                                     <tr>
                                         <td colspan="6" class="px-6 py-12 text-center">
@@ -1365,8 +1304,6 @@
                                         </td>
                                     </tr>
                                 </template>
-
-                                <!-- Looping Data Master Tarif (Menggunakan data yang sudah difilter) -->
                                 <template x-for="t in filteredTarifs" :key="t.kode">
                                     <tr class="bg-white border-b hover:bg-gray-50" :class="!t.aktif ? 'opacity-60' : ''">
                                         <td class="px-6 py-3 font-mono font-medium text-gray-900" x-text="t.kode"></td>
@@ -1472,19 +1409,16 @@
                             <form @submit.prevent="saveTarif()">
                                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                                     <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" x-text="isEditMode ? 'Edit Tarif Layanan' : 'Tambah Tarif Baru'"></h3>
-                                    
                                     <div class="space-y-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Kode Layanan</label>
                                             <input type="text" x-model="formTarif.kode" :disabled="isEditMode" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-500" placeholder="Contoh: UGD-006">
                                             <p x-show="!isEditMode" class="text-xs text-gray-500 mt-1">Kode harus unik dan tidak mengandung spasi.</p>
                                         </div>
-                                        
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Nama Layanan / Tindakan</label>
                                             <input type="text" x-model="formTarif.nama" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm">
                                         </div>
-
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Kategori</label>
                                             <input type="text" x-model="formTarif.kategori" list="kategori-list" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm" placeholder="Pilih atau ketik kategori baru">
@@ -1494,27 +1428,19 @@
                                                 </template>
                                             </datalist>
                                         </div>
-
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Harga (Rp)</label>
                                             <input type="number" x-model.number="formTarif.harga" required min="0" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm">
                                         </div>
-
                                         <div class="flex items-center mt-4">
                                             <input id="tarif-aktif" type="checkbox" x-model="formTarif.aktif" class="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded">
-                                            <label for="tarif-aktif" class="ml-2 block text-sm text-gray-900">
-                                                Status Aktif (Ditampilkan dalam pilihan saat Kunjungan)
-                                            </label>
+                                            <label for="tarif-aktif" class="ml-2 block text-sm text-gray-900">Status Aktif (Ditampilkan dalam pilihan saat Kunjungan)</label>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                                    <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm">
-                                        Simpan
-                                    </button>
-                                    <button type="button" @click="closeModalTarif()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                                        Batal
-                                    </button>
+                                    <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm">Simpan</button>
+                                    <button type="button" @click="closeModalTarif()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Batal</button>
                                 </div>
                             </form>
                         </div>
@@ -1530,13 +1456,11 @@
                             <form @submit.prevent="saveOfficer()">
                                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                                     <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" x-text="isOfficerEditMode ? 'Edit Data Petugas' : 'Tambah Petugas Baru'"></h3>
-                                    
                                     <div class="space-y-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Nama Petugas (Lengkap)</label>
                                             <input type="text" x-model="formOfficer.nama" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm" placeholder="Contoh: dr. Andi Susanto">
                                         </div>
-
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">Profesi / Jabatan</label>
                                             <input type="text" x-model="formOfficer.profesi" list="profesi-list" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm" placeholder="Pilih profesi">
@@ -1546,22 +1470,15 @@
                                                 </template>
                                             </datalist>
                                         </div>
-
                                         <div class="flex items-center mt-4">
                                             <input id="officer-aktif" type="checkbox" x-model="formOfficer.aktif" class="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded">
-                                            <label for="officer-aktif" class="ml-2 block text-sm text-gray-900">
-                                                Status Aktif (Ditampilkan dalam pilihan saat pendaftaran)
-                                            </label>
+                                            <label for="officer-aktif" class="ml-2 block text-sm text-gray-900">Status Aktif (Ditampilkan dalam pilihan saat pendaftaran)</label>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                                    <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm">
-                                        Simpan
-                                    </button>
-                                    <button type="button" @click="closeModalOfficer()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                                        Batal
-                                    </button>
+                                    <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm">Simpan</button>
+                                    <button type="button" @click="closeModalOfficer()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Batal</button>
                                 </div>
                             </form>
                         </div>
@@ -1583,7 +1500,6 @@
                                 </div>
                                 
                                 <div class="space-y-4">
-                                    <!-- Info Pasien Preview -->
                                     <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                                         <h4 class="text-sm font-semibold text-gray-700 mb-2">Informasi Pasien</h4>
                                         <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
@@ -1593,7 +1509,6 @@
                                             <div class="text-gray-500">Alamat:</div><div class="font-medium text-gray-900" x-text="formData.alamat || '-'"></div>
                                             <div class="text-gray-500">Unit Asal:</div><div class="font-medium text-gray-900" x-text="formData.unit_asal"></div>
                                             
-                                            <!-- Khusus Tampil Rujukan -->
                                             <template x-if="formData.unit_asal === 'UGD/Gawat Darurat' && formData.rujukan.status">
                                                 <div class="col-span-2 grid grid-cols-[100px_1fr] gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
                                                     <div class="text-amber-600 font-medium col-span-2">Data Rujukan:</div>
@@ -1601,7 +1516,6 @@
                                                 </div>
                                             </template>
 
-                                            <!-- Tampil Catatan di Preview -->
                                             <template x-if="formData.catatan">
                                                 <div class="col-span-2 mt-2 pt-2 border-t border-gray-200 text-sm">
                                                     <div class="text-gray-500 mb-1">Catatan:</div>
@@ -1611,7 +1525,6 @@
                                         </div>
                                     </div>
 
-                                    <!-- Rincian Biaya Preview -->
                                     <div>
                                         <h4 class="text-sm font-semibold text-gray-700 mb-2">Rincian Biaya</h4>
                                         <div class="border border-gray-200 rounded-lg overflow-x-auto custom-scrollbar">
@@ -1624,14 +1537,12 @@
                                                         <th class="px-3 py-2 text-right">Subtotal</th>
                                                     </tr>
                                                 </thead>
-                                                
                                                 <template x-if="formData.rincian_biaya.length === 0">
                                                     <tbody>
                                                         <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Belum ada tindakan yang diinput</td></tr>
                                                     </tbody>
                                                 </template>
                                                 
-                                                <!-- Pengelompokan Kategori Biaya Sesuai Urutan -->
                                                 <template x-for="group in layananGroups" :key="group.id">
                                                     <tbody x-show="formData.rincian_biaya.some(r => r.groupId === group.id)" class="counter-reset-table">
                                                         <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
@@ -1648,7 +1559,6 @@
                                                     </tbody>
                                                 </template>
 
-                                                <!-- Tambahan Rincian Ambulans di Paling Bawah -->
                                                 <template x-if="formData.unit_asal === 'UGD/Gawat Darurat' && formData.rujukan.status && formData.rujukan.id_tarif_ambulan">
                                                     <tbody>
                                                         <tr class="bg-amber-50 border-y border-amber-200">
@@ -1681,7 +1591,6 @@
                                 </div>
                             </div>
                             
-                            <!-- Modal Buttons -->
                             <div class="bg-gray-50 px-4 py-3 sm:px-6 flex flex-col sm:flex-row-reverse sm:space-x-2 sm:space-x-reverse gap-2 sm:gap-0">
                                 <button type="button" @click="handleSubmit()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:w-auto sm:text-sm">
                                     Simpan Kunjungan
@@ -1710,7 +1619,6 @@
                                     </div>
                                     
                                     <div class="space-y-4">
-                                        <!-- Info Pasien Preview -->
                                         <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                                             <h4 class="text-sm font-semibold text-gray-700 mb-2">Informasi Pasien</h4>
                                             <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
@@ -1720,7 +1628,6 @@
                                                 <div class="text-gray-500">Alamat:</div><div class="font-medium text-gray-900" x-text="selectedVisit.alamat || '-'"></div>
                                                 <div class="text-gray-500">Unit Asal:</div><div class="font-medium text-gray-900" x-text="selectedVisit.unit_asal"></div>
                                                 
-                                                <!-- Khusus Tampil Rujukan -->
                                                 <template x-if="selectedVisit.unit_asal === 'UGD/Gawat Darurat' && selectedVisit.rujukan?.status">
                                                     <div class="col-span-2 grid grid-cols-[100px_1fr] gap-y-2 gap-x-4 text-sm mt-1 pt-2 border-t border-gray-200">
                                                         <div class="text-amber-600 font-medium col-span-2">Data Rujukan:</div>
@@ -1728,7 +1635,6 @@
                                                     </div>
                                                 </template>
 
-                                                <!-- Tampil Catatan di Preview Kunjungan -->
                                                 <template x-if="selectedVisit.catatan">
                                                     <div class="col-span-2 mt-2 pt-2 border-t border-gray-200 text-sm">
                                                         <div class="text-gray-500 mb-1">Catatan:</div>
@@ -1738,7 +1644,6 @@
                                             </div>
                                         </div>
 
-                                        <!-- Rincian Biaya Preview -->
                                         <div>
                                             <h4 class="text-sm font-semibold text-gray-700 mb-2">Rincian Biaya</h4>
                                             <div class="border border-gray-200 rounded-lg overflow-x-auto custom-scrollbar">
@@ -1751,14 +1656,11 @@
                                                             <th class="px-3 py-2 text-right">Subtotal</th>
                                                         </tr>
                                                     </thead>
-                                                    
                                                     <template x-if="!selectedVisit.rincian_biaya || selectedVisit.rincian_biaya.length === 0">
                                                         <tbody>
                                                             <tr><td colspan="4" class="px-3 py-4 text-center text-gray-400 italic">Tidak ada tindakan</td></tr>
                                                         </tbody>
                                                     </template>
-                                                    
-                                                    <!-- Pengelompokan Kategori Biaya Sesuai Urutan di Daftar Riwayat -->
                                                     <template x-for="group in layananGroups" :key="group.id">
                                                         <tbody x-show="selectedVisit.rincian_biaya?.some(r => r.groupId === group.id)" class="counter-reset-table">
                                                             <tr class="border-y" :class="group.bgClass + ' ' + group.borderClass">
@@ -1775,7 +1677,6 @@
                                                         </tbody>
                                                     </template>
 
-                                                    <!-- Tambahan Rincian Ambulans di Paling Bawah -->
                                                     <template x-if="selectedVisit.rujukan?.status">
                                                         <tbody>
                                                             <tr class="bg-amber-50 border-y border-amber-200">
@@ -1807,7 +1708,6 @@
                                         </div>
                                     </div>
                                     
-                                    <!-- Modal Buttons -->
                                     <div class="mt-6 flex flex-col sm:flex-row-reverse sm:space-x-2 sm:space-x-reverse gap-2 sm:gap-0">
                                         <template x-if="selectedVisit.status_pemeriksaan !== 'Sudah Diperiksa'">
                                             <button type="button" @click="tandaiSudahDiperiksa(selectedVisit.id)" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:w-auto sm:text-sm">
@@ -1815,7 +1715,6 @@
                                                 Sudah Diperiksa
                                             </button>
                                         </template>
-                                        <!-- Tombol Panggil Fungsi Cetak -->
                                         <button type="button" @click="cetakKwitansi(selectedVisit)" class="w-full inline-flex justify-center rounded-md border border-blue-200 shadow-sm px-4 py-2 bg-blue-50 text-base font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:w-auto sm:text-sm">
                                             <svg class="mr-1.5 mt-0.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
                                             Cetak Struk
@@ -1940,60 +1839,86 @@
                 </div>
 
                 <!-- TAB: ABOUT / TENTANG -->
-                <div x-show="activeTab === 'about'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden p-8 sm:p-12 text-center max-w-2xl mx-auto mt-4">
-                    <div class="inline-flex items-center justify-center p-4 bg-green-50 rounded-full mb-6 text-green-500">
+                <div x-show="activeTab === 'about'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden p-8 sm:p-12 text-center max-w-2xl mx-auto mt-4 relative">
+                    
+                    <!-- Tombol Cerdas Instal PWA (Muncul jika tersedia) -->
+                    <div x-show="isInstallable" x-cloak class="absolute top-4 right-4 sm:top-6 sm:right-6 animate-bounce-subtle">
+                        <button @click="promptInstall()" class="bg-green-600 hover:bg-green-700 text-white shadow-lg text-xs sm:text-sm font-bold py-2 sm:py-2.5 px-4 sm:px-5 rounded-full flex items-center transition-transform transform active:scale-95 border-2 border-white ring-2 ring-green-100">
+                            <svg class="mr-2" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Instal Aplikasi
+                        </button>
+                    </div>
+
+                    <div class="inline-flex items-center justify-center p-4 bg-green-50 rounded-full mb-6 text-green-500 mt-8 sm:mt-0">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
                     </div>
                     <h2 class="text-2xl font-bold text-gray-900 mb-2">Billing Puskesmas</h2>
                     <p class="text-sm text-green-600 font-semibold mb-6 tracking-widest uppercase">VERSI 1.0.0</p>
-                    <p class="text-gray-600 mb-8 leading-relaxed">
-                        Aplikasi ini dapat diinstal langsung ke perangkat agar lebih mudah diakses seperti aplikasi mobile. Untuk menginstal, gunakan popup instalasi yang tersedia atau ketuk ikon menu browser (titik tiga di pojok kanan atas), lalu pilih menu “Instal aplikasi” (Install App) atau “Tambahkan ke Layar Utama” (Add to Home Screen).
-                    </p>
+                    
+                    <div class="text-gray-600 mb-8 leading-relaxed space-y-5 text-left sm:text-center">
+                        <p>
+                            Aplikasi ini dikembangkan untuk memudahkan pencatatan rincian biaya pelayanan, tindakan medis, dan manajemen petugas di lingkungan Puskesmas secara digital, terintegrasi, dan mudah digunakan.
+                        </p>
+                        <div class="bg-blue-50 border border-blue-100 p-5 rounded-xl text-sm text-blue-800 text-left shadow-sm">
+                            <strong class="flex items-center text-blue-900 text-base mb-2">
+                                <svg class="mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                                Info Instalasi Aplikasi PWA
+                            </strong>
+                            <p class="mb-2">Aplikasi ini dapat diinstal langsung ke perangkat (HP/Komputer) Anda. Silakan instal melalui tombol/notifikasi <em>pop-up</em> yang muncul di layar, atau secara manual dengan cara:</p>
+                            <ul class="list-disc list-outside ml-5 space-y-1 text-blue-700">
+                                <li>Ketuk ikon menu browser (titik tiga di pojok kanan atas).</li>
+                                <li>Gulir ke bawah lalu pilih menu <b>"Instal aplikasi"</b> (Install app) atau <b>"Tambahkan ke Layar utama"</b> (Add to Home screen).</li>
+                            </ul>
+                        </div>
+                    </div>
+
                     <div class="border-t border-gray-100 pt-6">
                         <p class="text-xs text-gray-400">&copy; 2026 Sistem Informasi Puskesmas. All rights reserved.</p>
-<p class="text-xs mt-1 font-bold text-green-400 tracking-wider">
-    Win x Naraku
-</p>
+                        <p class="text-xs mt-1 font-bold text-green-400 tracking-wider">
+                            Win x Naraku
+                        </p>
                     </div>
                 </div>
                 
             </main>
 
-            <!-- Navigasi Mobile Bawah bergaya Modern FAB (Meniru referensi gambar) -->
+            <!-- Navigasi Mobile Bawah bergaya Modern FAB -->
             <nav class="sm:hidden fixed bottom-0 left-0 right-0 bg-white z-40 shadow-[0_-4px_20px_-5px_rgba(0,0,0,0.1)] pb-[env(safe-area-inset-bottom)]">
                 <div class="flex justify-between items-center h-16 px-2 relative">
-                    <!-- 1. Kunjungan -->
                     <button @click="activeTab = 'kunjungan'" :class="activeTab === 'kunjungan' ? 'text-green-600' : 'text-gray-400 hover:text-gray-600'" class="flex flex-col items-center justify-center w-full h-full transition-colors">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="activeTab === 'kunjungan' ? 'fill-green-50' : ''"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
                         <span class="text-[10px] mt-1 font-medium">Kunjungan</span>
                     </button>
 
-                    <!-- 2. Tarif -->
                     <button @click="activeTab = 'tarif'" :class="activeTab === 'tarif' ? 'text-green-600' : 'text-gray-400 hover:text-gray-600'" class="flex flex-col items-center justify-center w-full h-full transition-colors">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="activeTab === 'tarif' ? 'fill-green-50' : ''"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
                         <span class="text-[10px] mt-1 font-medium">Tarif</span>
                     </button>
 
-                    <!-- 3. FAB Tambah (Center Floating Action Button) -->
                     <div class="relative w-full flex justify-center">
                         <button @click="activeTab = 'tambah'" class="absolute -top-10 flex flex-col items-center justify-center focus:outline-none group">
-                            <!-- Efek potongan (cutout) diakali menggunakan border-white yang tebal -->
                             <div class="h-14 w-14 rounded-full flex items-center justify-center text-white shadow-[0_8px_16px_rgba(34,197,94,0.3)] border-4 border-white transition-transform group-hover:scale-105 group-active:scale-95" :class="activeTab === 'tambah' ? 'bg-green-600 ring-2 ring-green-100 ring-offset-1' : 'bg-green-500'">
                                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                             </div>
                         </button>
                     </div>
 
-                    <!-- 4. Petugas -->
                     <button @click="activeTab = 'petugas'" :class="activeTab === 'petugas' ? 'text-green-600' : 'text-gray-400 hover:text-gray-600'" class="flex flex-col items-center justify-center w-full h-full transition-colors">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="activeTab === 'petugas' ? 'fill-green-50' : ''"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                         <span class="text-[10px] mt-1 font-medium">Petugas</span>
                     </button>
 
-                    <!-- 5. About (Menggantikan Keluar) -->
-                    <button @click="activeTab = 'about'" :class="activeTab === 'about' ? 'text-green-600' : 'text-gray-400 hover:text-gray-600'" class="flex flex-col items-center justify-center w-full h-full transition-colors">
+                    <button @click="activeTab = 'about'" :class="activeTab === 'about' ? 'text-green-600' : 'text-gray-400 hover:text-gray-600'" class="flex flex-col items-center justify-center w-full h-full transition-colors relative">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="activeTab === 'about' ? 'fill-green-50' : ''"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                         <span class="text-[10px] mt-1 font-medium">About</span>
+                        
+                        <!-- Notifikasi titik merah kecil jika PWA bisa diinstal -->
+                        <template x-if="isInstallable">
+                            <span class="absolute top-2 right-4 flex h-2.5 w-2.5">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                            </span>
+                        </template>
                     </button>
                 </div>
             </nav>
