@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistem Pencatatan Biaya Puskesmas</title>
     
+    <!-- Konfigurasi PWA (Progressive Web App) -->
+    <meta name="theme-color" content="#22c55e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Puskesmas">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="manifest" href="/manifest.json">
+    
     <!-- Ikon Tab Browser (Favicon) Bulat Hijau dengan Detak Jantung -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='12' fill='%2322c55e'/%3E%3Cpath d='M5 12h3l2-5 3 10 2-5h4' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     
@@ -1992,5 +2000,20 @@
 
         </div>
     </div>
+
+    <!-- Script Registrasi Service Worker PWA -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then((registration) => {
+                        console.log('PWA: Service Worker berhasil didaftarkan. Scope:', registration.scope);
+                    })
+                    .catch((error) => {
+                        console.log('PWA: Registrasi Service Worker gagal (Wajar jika di mode preview/local tanpa HTTPS):', error);
+                    });
+            });
+        }
+    </script>
 </body>
 </html>
