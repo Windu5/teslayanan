@@ -447,7 +447,7 @@
                 }
             },
 
-            // Modifikasi fungsi resetForm agar tidak berpindah tab jika ditekan manual
+            // Modifikasi fungsi resetForm agar menampilkan notifikasi jika ditekan manual
             resetForm(changeTab = true) {
                 this.formData = {
                     tanggal: new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0'),
@@ -459,6 +459,9 @@
                 };
                 if (changeTab) {
                     this.activeTab = 'kunjungan';
+                } else {
+                    // Munculkan notifikasi saat tombol Bersihkan Form diklik (changeTab == false)
+                    this.showNotification("Formulir berhasil dibersihkan", "success");
                 }
             },
 
@@ -891,7 +894,7 @@
                                 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-6 4 12 3-6h4"></path></svg>
                             </div>
                             <div>
-                                <h1 class="text-xl font-bold text-gray-900 leading-tight">Sistem Billing Puskesmas</h1>
+                                <h1 class="text-xl font-bold text-gray-900 leading-tight">Billing Puskesmas</h1>
                                 <p class="text-xs text-gray-500">Rekam Biaya Pelayanan & Tindakan</p>
                             </div>
                         </div>
@@ -1703,6 +1706,7 @@
                                         <div class="bg-gray-50 p-4 rounded-lg border border-gray-100">
                                             <h4 class="text-sm font-semibold text-gray-700 mb-2">Informasi Pasien</h4>
                                             <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
+                                                <div class="text-gray-500">Tanggal:</div><div class="font-medium text-gray-900" x-text="selectedVisit.tanggal || '-'"></div>
                                                 <div class="text-gray-500">Nama:</div><div class="font-medium text-gray-900" x-text="selectedVisit.id_pasien || '-'"></div>
                                                 <div class="text-gray-500">Umur:</div><div class="font-medium text-gray-900" x-text="selectedVisit.umur ? selectedVisit.umur + ' Tahun' : '-'"></div>
                                                 <div class="text-gray-500">Alamat:</div><div class="font-medium text-gray-900" x-text="selectedVisit.alamat || '-'"></div>
@@ -1932,7 +1936,7 @@
                     <div class="inline-flex items-center justify-center p-4 bg-green-50 rounded-full mb-6 text-green-500">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
                     </div>
-                    <h2 class="text-2xl font-bold text-gray-900 mb-2">Sistem Billing Puskesmas</h2>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-2">Billing Puskesmas</h2>
                     <p class="text-sm text-green-600 font-semibold mb-6 tracking-widest uppercase">VERSI 1.0.0</p>
                     <p class="text-gray-600 mb-8 leading-relaxed">
                         Aplikasi ini dikembangkan untuk memudahkan pencatatan rincian biaya pelayanan, tindakan medis, dan manajemen petugas di lingkungan Puskesmas secara digital, terintegrasi, dan mudah digunakan.
